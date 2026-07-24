@@ -198,15 +198,6 @@ const tournamentSchema = new mongoose.Schema(
   }
 );
 
-// Tournament save হওয়ার আগে joinedSlots ঠিক রাখা হবে
-tournamentSchema.pre("save", function (next) {
-  if (Array.isArray(this.joinedPlayers)) {
-    this.joinedSlots = this.joinedPlayers.length;
-  }
-
-  next();
-});
-
 const Tournament =
   mongoose.models.Tournament ||
   mongoose.model("Tournament", tournamentSchema);
