@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 
+// =====================================
+// JOINED PLAYER SCHEMA
+// =====================================
 const joinedPlayerSchema = new mongoose.Schema(
   {
     userId: {
@@ -30,7 +33,10 @@ const joinedPlayerSchema = new mongoose.Schema(
   }
 );
 
-const resultSchema = new mongoose.Schema(
+// =====================================
+// TOURNAMENT RESULT SCHEMA
+// =====================================
+const tournamentResultSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -80,6 +86,9 @@ const resultSchema = new mongoose.Schema(
   }
 );
 
+// =====================================
+// TOURNAMENT SCHEMA
+// =====================================
 const tournamentSchema = new mongoose.Schema(
   {
     title: {
@@ -90,7 +99,6 @@ const tournamentSchema = new mongoose.Schema(
 
     game: {
       type: String,
-      required: true,
       default: "Free Fire",
       trim: true,
     },
@@ -111,12 +119,14 @@ const tournamentSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+      default: 0,
     },
 
     prizePool: {
       type: Number,
       required: true,
       min: 0,
+      default: 0,
     },
 
     totalSlots: {
@@ -131,21 +141,6 @@ const tournamentSchema = new mongoose.Schema(
       min: 0,
     },
 
-    joinedPlayers: {
-      type: [joinedPlayerSchema],
-      default: [],
-    },
-
-    results: {
-      type: [resultSchema],
-      default: [],
-    },
-
-    resultPublished: {
-      type: Boolean,
-      default: false,
-    },
-
     date: {
       type: String,
       required: true,
@@ -156,6 +151,12 @@ const tournamentSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+
+    status: {
+      type: String,
+      enum: ["Upcoming", "Live", "Completed"],
+      default: "Upcoming",
     },
 
     roomId: {
@@ -170,21 +171,44 @@ const tournamentSchema = new mongoose.Schema(
       trim: true,
     },
 
-    status: {
-      type: String,
-      enum: ["Upcoming", "Live", "Completed"],
-      default: "Upcoming",
-    },
-
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
     },
+
+    joinedPlayers: {
+      type: [joinedPlayerSchema],
+      default: [],
+    },
+
+    results: {
+      type: [tournamentResultSchema],
+      default: [],
+    },
+
+    resultPublished: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
+    versionKey: false,
   }
 );
 
-module.exports = mongoose.model("Tournament", tournamentSchema);
+// Tournament save হওয়ার আগে joinedSlots ঠিক রাখা হবে
+tournamentSchema.pre("save", function (next) {
+  if (Array.isArray(this.joinedPlayers)) {
+    this.joinedSlots = this.joinedPlayers.length;
+  }
+
+  next();
+});
+
+const Tournament =
+  mongoose.models.Tournament ||
+  mongoose.model("Tournament", tournamentSchema);
+
+module.exports = Tournament;
