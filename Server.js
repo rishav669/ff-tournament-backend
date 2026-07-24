@@ -1,38 +1,61 @@
+require("dotenv").config();
+
 const express = require("express");
 const mongoose = require("mongoose");
-require("dotenv").config();
 
 const authRoutes = require("./models/Routes/authRoutes");
 const tournamentRoutes = require("./models/Routes/tournamentRoutes");
 const walletRoutes = require("./models/Routes/walletRoutes");
+const rewardRoutes = require("./models/Routes/rewardRoutes");
 
 const app = express();
+
 const PORT = process.env.PORT || 5000;
 
-// ========================================
-// GLOBAL MIDDLEWARE
-// ========================================
-app.use(express.json());
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  process.env.MONGODB_URI;
 
 // ========================================
-// API ROUTES
+// BODY PARSERS
 // ========================================
-app.use("/api/auth", authRoutes);
-app.use("/api/tournaments", tournamentRoutes);
-app.use("/api/wallet", walletRoutes);
+app.use(express.json());
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
 
 // ========================================
 // HOME ROUTE
 // ========================================
 app.get("/", (req, res) => {
-  res.status(200).send("Free Fire Tournament API Running 🚀");
+  return res.status(200).json({
+    success: true,
+    message:
+      "Free Fire Tournament API is running",
+  });
 });
+
+// ========================================
+// API ROUTES
+// ========================================
+app.use("/api/auth", authRoutes);
+
+app.use(
+  "/api/tournaments",
+  tournamentRoutes
+);
+
+app.use("/api/wallet", walletRoutes);
+
+app.use("/api/rewards", rewardRoutes);
 
 // ========================================
 // 404 ROUTE
 // ========================================
 app.use((req, res) => {
-  res.status(404).json({
+  return res.status(404).json({
     success: false,
     message: "API route not found",
   });
@@ -44,31 +67,46 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
   console.error("Global server error:", error);
 
-  res.status(error.status || 500).json({
+  return res.status(
+    error.statusCode || 500
+  ).json({
     success: false,
-    message: error.message || "Internal server error",
+    message:
+      error.message ||
+      "Internal server error",
   });
 });
 
 // ========================================
-// DATABASE CONNECTION AND SERVER START
+// DATABASE CONNECTION + SERVER START
 // ========================================
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log("MongoDB connected successfully");
+const startServer = async () => {
+  try {
+    if (!MONGO_URI) {
+      throw new Error(
+        "MongoDB connection URL is missing from .env"
+      );
+    }
+
+    await mongoose.connect(MONGO_URI);
+
+    console.log(
+      "MongoDB connected successfully"
+    );
 
     app.listen(PORT, () => {
       console.log(
         `Server running on http://localhost:${PORT}`
       );
     });
-  })
-  .catch((error) => {
+  } catch (error) {
     console.error(
-      "MongoDB connection failed:",
+      "Server startup error:",
       error.message
     );
 
     process.exit(1);
-  });
+  }
+};
+
+startServer();

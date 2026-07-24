@@ -69,6 +69,21 @@ const tournamentResultSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // Kill-এর জন্য কত টাকা reward
+    killRewardAmount: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    // Rank/Winner-এর জন্য কত টাকা reward
+    winnerRewardAmount: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    // Kill reward + Winner reward
     prizeAmount: {
       type: Number,
       required: true,
@@ -79,6 +94,53 @@ const tournamentResultSchema = new mongoose.Schema(
     isWinner: {
       type: Boolean,
       default: false,
+    },
+
+    // Hacker বা cheating ধরা পড়লে true হবে
+    isDisqualified: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Admin verification ছাড়া reward দেওয়া হবে না
+    rewardStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
+
+    rewardPaid: {
+      type: Boolean,
+      default: false,
+    },
+
+    rewardNote: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    verifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    killRewardTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+      default: null,
+    },
+
+    winnerRewardTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+      default: null,
     },
   },
   {
