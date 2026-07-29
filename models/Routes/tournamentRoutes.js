@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const Tournament = require("../tournament");
 const User = require("../user");
 const Transaction = require("../transaction");
+const Settings = require("../settings");
 const {
   processReferralReward,
 } = require("../referralRewardService");
@@ -296,6 +297,89 @@ router.post(
           );
         }
 
+        let settings =
+          await Settings.findOne().session(
+            session
+          );
+
+        if (!settings) {
+          const createdSettings =
+            await Settings.create(
+              [{}],
+              {
+                session,
+              }
+            );
+
+          settings = createdSettings[0];
+        }
+
+        const {
+          acceptRules,
+          rulesLanguage,
+        } = req.body || {};
+
+        const selectedRulesLanguage =
+          rulesLanguage === undefined ||
+          rulesLanguage === null ||
+          !String(rulesLanguage).trim()
+            ? String(
+                settings.defaultRulesLanguage ||
+                  "english"
+              ).toLowerCase()
+            : String(rulesLanguage)
+                .trim()
+                .toLowerCase();
+
+        if (
+          !["english", "hindi"].includes(
+            selectedRulesLanguage
+          )
+        ) {
+          throw createRouteError(
+            400,
+            "rulesLanguage must be english or hindi"
+          );
+        }
+
+        const rulesAccepted =
+          acceptRules === true;
+
+        if (
+          settings.rulesAcceptanceRequired ===
+            true &&
+          !rulesAccepted
+        ) {
+          throw createRouteError(
+            400,
+            "You must accept the Tournament Rules and Fair Play Policy before joining",
+            {
+              rulesAcceptanceRequired:
+                true,
+              currentRulesVersion:
+                Number(
+                  settings.rulesVersion || 1
+                ),
+              rulesLanguage:
+                selectedRulesLanguage,
+              rulesEndpoint:
+                `/api/settings/rules?language=${selectedRulesLanguage}`,
+            }
+          );
+        }
+
+        const rulesVersionAccepted =
+          rulesAccepted
+            ? Number(
+                settings.rulesVersion || 1
+              )
+            : 0;
+
+        const rulesAcceptedAt =
+          rulesAccepted
+            ? new Date()
+            : null;
+
         const user = await User.findById(
           req.user.userId
         ).session(session);
@@ -409,6 +493,11 @@ router.post(
           userId: user._id,
           freeFireUid: user.freeFireUid,
           freeFireIgn: user.freeFireIgn,
+          rulesAccepted,
+          rulesVersionAccepted,
+          rulesLanguageAccepted:
+            selectedRulesLanguage,
+          rulesAcceptedAt,
           joinedAt: new Date(),
         });
 
@@ -436,6 +525,19 @@ router.post(
             userId: user._id,
             freeFireUid: user.freeFireUid,
             freeFireIgn: user.freeFireIgn,
+
+            rulesAcceptance: {
+              required:
+                settings.rulesAcceptanceRequired ===
+                true,
+              accepted: rulesAccepted,
+              version:
+                rulesVersionAccepted,
+              language:
+                selectedRulesLanguage,
+              acceptedAt:
+                rulesAcceptedAt,
+            },
           },
 
           wallet: {

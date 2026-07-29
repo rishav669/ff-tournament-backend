@@ -23,6 +23,28 @@ const joinedPlayerSchema = new mongoose.Schema(
       trim: true,
     },
 
+    rulesAccepted: {
+      type: Boolean,
+      default: false,
+    },
+
+    rulesVersionAccepted: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    rulesLanguageAccepted: {
+      type: String,
+      enum: ["english", "hindi"],
+      default: "english",
+    },
+
+    rulesAcceptedAt: {
+      type: Date,
+      default: null,
+    },
+
     joinedAt: {
       type: Date,
       default: Date.now,
