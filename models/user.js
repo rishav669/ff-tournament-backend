@@ -49,6 +49,35 @@ const userSchema = new mongoose.Schema(
       min: [0, "Wallet balance cannot be negative"],
     },
 
+    // Coin Balance
+    coinBalance: {
+      type: Number,
+      default: 0,
+      min: [0, "Coin balance cannot be negative"],
+    },
+
+    // =============================
+    // Referral System
+    // =============================
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+      uppercase: true,
+    },
+
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    referralRewardGiven: {
+      type: Boolean,
+      default: false,
+    },
+
     totalDeposited: {
       type: Number,
       default: 0,

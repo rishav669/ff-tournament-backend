@@ -7,29 +7,83 @@ const authMiddleware = require("../../middleware/authMiddleware");
 
 const router = express.Router();
 
+// =====================================
+// GENERATE UNIQUE REFERRAL CODE
+// =====================================
+async function generateReferralCode(name) {
+  let referralCode;
+  let codeExists = true;
+
+  while (codeExists) {
+    const prefix =
+      String(name)
+        .replace(/[^A-Za-z]/g, "")
+        .toUpperCase()
+        .substring(0, 4) || "USER";
+
+    const randomNumber = Math.floor(
+      1000 + Math.random() * 9000
+    );
+
+    referralCode = `${prefix}${randomNumber}`;
+
+    codeExists = await User.exists({
+      referralCode,
+    });
+  }
+
+  return referralCode;
+}
+
 // ===============================
 // USER REGISTER
 // ===============================
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, freeFireUid, freeFireIgn } = req.body;
+    const {
+      name,
+      email,
+      password,
+      freeFireUid,
+      freeFireIgn,
+      referralCode,
+    } = req.body;
 
-    if (!name || !email || !password || !freeFireUid || !freeFireIgn) {
+    if (
+      !name ||
+      !email ||
+      !password ||
+      !freeFireUid ||
+      !freeFireIgn
+    ) {
       return res.status(400).json({
+        success: false,
         message:
           "Name, email, password, Free Fire UID and Free Fire IGN are required",
       });
     }
 
-    if (password.length < 6) {
+    if (String(password).length < 6) {
       return res.status(400).json({
-        message: "Password must be at least 6 characters",
+        success: false,
+        message:
+          "Password must be at least 6 characters",
       });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    const normalizedUid = String(freeFireUid).trim();
-    const normalizedIgn = freeFireIgn.trim();
+    const normalizedName = String(name).trim();
+
+    const normalizedEmail = String(email)
+      .toLowerCase()
+      .trim();
+
+    const normalizedUid = String(
+      freeFireUid
+    ).trim();
+
+    const normalizedIgn = String(
+      freeFireIgn
+    ).trim();
 
     const existingEmail = await User.findOne({
       email: normalizedEmail,
@@ -37,6 +91,7 @@ router.post("/register", async (req, res) => {
 
     if (existingEmail) {
       return res.status(400).json({
+        success: false,
         message: "Email already registered",
       });
     }
@@ -47,21 +102,74 @@ router.post("/register", async (req, res) => {
 
     if (existingUid) {
       return res.status(400).json({
-        message: "This Free Fire UID is already registered",
+        success: false,
+        message:
+          "This Free Fire UID is already registered",
       });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    let referredBy = null;
+    let usedReferralCode = null;
+
+    if (
+      referralCode &&
+      String(referralCode).trim()
+    ) {
+      usedReferralCode = String(referralCode)
+        .trim()
+        .toUpperCase();
+
+      const referrer = await User.findOne({
+        referralCode: usedReferralCode,
+      });
+
+      if (!referrer) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid referral code",
+        });
+      }
+
+      if (referrer.email === normalizedEmail) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "You cannot use your own referral code",
+        });
+      }
+
+      if (referrer.isBlocked) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "This referral code is unavailable",
+        });
+      }
+
+      referredBy = referrer._id;
+    }
+
+    const hashedPassword = await bcrypt.hash(
+      String(password),
+      10
+    );
+
+    const myReferralCode =
+      await generateReferralCode(normalizedName);
 
     const newUser = await User.create({
-      name: name.trim(),
+      name: normalizedName,
       email: normalizedEmail,
       password: hashedPassword,
       freeFireUid: normalizedUid,
       freeFireIgn: normalizedIgn,
+      referralCode: myReferralCode,
+      referredBy,
+      referralRewardGiven: false,
     });
 
     return res.status(201).json({
+      success: true,
       message: "User registered successfully",
       user: {
         id: newUser._id,
@@ -70,24 +178,48 @@ router.post("/register", async (req, res) => {
         freeFireUid: newUser.freeFireUid,
         freeFireIgn: newUser.freeFireIgn,
         role: newUser.role,
+        walletBalance: newUser.walletBalance,
+        coinBalance: newUser.coinBalance,
+        referralCode: newUser.referralCode,
+        referredBy: newUser.referredBy,
+        usedReferralCode,
       },
     });
   } catch (error) {
     console.error("Register error:", error);
 
     if (error.code === 11000) {
-      const duplicateField = Object.keys(error.keyPattern || {})[0];
+      const duplicateField = Object.keys(
+        error.keyPattern || {}
+      )[0];
+
+      let message =
+        "Duplicate account information detected";
+
+      if (duplicateField === "freeFireUid") {
+        message =
+          "This Free Fire UID is already registered";
+      }
+
+      if (duplicateField === "email") {
+        message = "Email already registered";
+      }
+
+      if (duplicateField === "referralCode") {
+        message =
+          "Referral code generation conflict. Please try again";
+      }
 
       return res.status(400).json({
-        message:
-          duplicateField === "freeFireUid"
-            ? "This Free Fire UID is already registered"
-            : "Email already registered",
+        success: false,
+        message,
       });
     }
 
     return res.status(500).json({
-      message: "Server error during registration",
+      success: false,
+      message:
+        "Server error during registration",
       error: error.message,
     });
   }
@@ -102,31 +234,72 @@ router.post("/login", async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({
-        message: "Email and password are required",
+        success: false,
+        message:
+          "Email and password are required",
       });
     }
 
+    const normalizedEmail = String(email)
+      .toLowerCase()
+      .trim();
+
     const user = await User.findOne({
-      email: email.toLowerCase().trim(),
-    });
+      email: normalizedEmail,
+    }).select("+password");
 
     if (!user) {
       return res.status(401).json({
-        message: "Invalid email or password",
+        success: false,
+        message:
+          "Invalid email or password",
       });
     }
 
-    const passwordMatched = await bcrypt.compare(password, user.password);
+    if (!user.password) {
+      return res.status(500).json({
+        success: false,
+        message:
+          "User password data is unavailable",
+      });
+    }
+
+    const passwordMatched =
+      await bcrypt.compare(
+        String(password),
+        user.password
+      );
 
     if (!passwordMatched) {
       return res.status(401).json({
-        message: "Invalid email or password",
+        success: false,
+        message:
+          "Invalid email or password",
       });
     }
 
+    if (user.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your account has been blocked",
+      });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({
+        success: false,
+        message:
+          "JWT secret is missing from server environment",
+      });
+    }
+
+    user.lastLoginAt = new Date();
+    await user.save();
+
     const token = jwt.sign(
       {
-        userId: user._id,
+        userId: user._id.toString(),
         role: user.role,
       },
       process.env.JWT_SECRET,
@@ -136,6 +309,7 @@ router.post("/login", async (req, res) => {
     );
 
     return res.status(200).json({
+      success: true,
       message: "Login successful",
       token,
       user: {
@@ -145,13 +319,21 @@ router.post("/login", async (req, res) => {
         freeFireUid: user.freeFireUid,
         freeFireIgn: user.freeFireIgn,
         role: user.role,
+        walletBalance: user.walletBalance,
+        coinBalance: user.coinBalance,
+        referralCode: user.referralCode,
+        referredBy: user.referredBy,
+        referralRewardGiven:
+          user.referralRewardGiven,
       },
     });
   } catch (error) {
     console.error("Login error:", error);
 
     return res.status(500).json({
-      message: "Server error during login",
+      success: false,
+      message:
+        "Server error during login",
       error: error.message,
     });
   }
@@ -160,28 +342,42 @@ router.post("/login", async (req, res) => {
 // ===============================
 // USER PROFILE
 // ===============================
-router.get("/profile", authMiddleware, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.userId).select("-password");
+router.get(
+  "/profile",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const user = await User.findById(
+        req.user.userId
+      ).select("-password");
 
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found",
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Profile fetched successfully",
+        user,
+      });
+    } catch (error) {
+      console.error(
+        "Profile error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Server error while fetching profile",
+        error: error.message,
       });
     }
-
-    return res.status(200).json({
-      message: "Profile fetched successfully",
-      user,
-    });
-  } catch (error) {
-    console.error("Profile error:", error);
-
-    return res.status(500).json({
-      message: "Server error while fetching profile",
-      error: error.message,
-    });
   }
-});
+);
 
 module.exports = router;

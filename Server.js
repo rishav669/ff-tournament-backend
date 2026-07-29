@@ -7,7 +7,12 @@ const authRoutes = require("./models/Routes/authRoutes");
 const tournamentRoutes = require("./models/Routes/tournamentRoutes");
 const walletRoutes = require("./models/Routes/walletRoutes");
 const rewardRoutes = require("./models/Routes/rewardRoutes");
-
+const withdrawRoutes = require("./models/Routes/withdrawRoutes");
+const adminRoutes = require("./models/Routes/adminRoutes");
+const settingsRoutes = require("./models/Routes/settingsRoutes");
+const coinRoutes = require("./models/Routes/coinRoutes");
+const referralRoutes = require("./models/Routes/referralRoutes");
+console.log("Referral route imported successfully");
 const app = express();
 
 const PORT = process.env.PORT || 5000;
@@ -20,6 +25,7 @@ const MONGO_URI =
 // BODY PARSERS
 // ========================================
 app.use(express.json());
+
 app.use(
   express.urlencoded({
     extended: true,
@@ -32,11 +38,15 @@ app.use(
 app.get("/", (req, res) => {
   return res.status(200).json({
     success: true,
-    message:
-      "Free Fire Tournament API is running",
+    message: "Free Fire Tournament API is running",
   });
 });
-
+app.get("/api/test-referral", (req, res) => {
+  return res.status(200).json({
+    success: true,
+    message: "Referral Route Test OK",
+  });
+});
 // ========================================
 // API ROUTES
 // ========================================
@@ -50,6 +60,19 @@ app.use(
 app.use("/api/wallet", walletRoutes);
 
 app.use("/api/rewards", rewardRoutes);
+
+app.use(
+  "/api/withdrawals",
+  withdrawRoutes
+);
+
+app.use("/api/admin", adminRoutes);
+
+app.use("/api/settings", settingsRoutes);
+
+app.use("/api/coins", coinRoutes);
+
+app.use("/api/referrals", referralRoutes);
 
 // ========================================
 // 404 ROUTE
@@ -65,7 +88,10 @@ app.use((req, res) => {
 // GLOBAL ERROR HANDLER
 // ========================================
 app.use((error, req, res, next) => {
-  console.error("Global server error:", error);
+  console.error(
+    "Global server error:",
+    error
+  );
 
   return res.status(
     error.statusCode || 500

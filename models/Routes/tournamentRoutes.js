@@ -771,6 +771,7 @@ router.put(
 
 // =====================================
 // PUBLISH MATCH RESULTS — ADMIN ONLY
+// REWARDS WILL REMAIN PENDING
 // =====================================
 router.put(
   "/publish-results/:id",
@@ -778,22 +779,77 @@ router.put(
   adminMiddleware,
   async (req, res) => {
     try {
-      const { results } = req.body || {};
+      const {
+        killRewardPerKill,
+        rankRewards,
+        results,
+      } = req.body || {};
 
-      if (
-        !Array.isArray(results) ||
-        results.length === 0
-      ) {
+      if (!Array.isArray(results) || results.length === 0) {
         return res.status(400).json({
-          message:
-            "Results must be a non-empty array",
+          message: "Results must be a non-empty array",
         });
       }
 
-      const tournament =
-        await Tournament.findById(
-          req.params.id
-        );
+      const parsedKillRewardPerKill = Number(
+        killRewardPerKill || 0
+      );
+
+      if (
+        Number.isNaN(parsedKillRewardPerKill) ||
+        parsedKillRewardPerKill < 0
+      ) {
+        return res.status(400).json({
+          message:
+            "Kill reward per kill must be a non-negative number",
+        });
+      }
+
+      if (
+        rankRewards !== undefined &&
+        (typeof rankRewards !== "object" ||
+          Array.isArray(rankRewards) ||
+          rankRewards === null)
+      ) {
+        return res.status(400).json({
+          message:
+            "Rank rewards must be an object",
+        });
+      }
+
+      const formattedRankRewards = {};
+
+      for (const [rankKey, rewardValue] of Object.entries(
+        rankRewards || {}
+      )) {
+        const parsedRank = Number(rankKey);
+        const parsedReward = Number(rewardValue);
+
+        if (
+          !Number.isInteger(parsedRank) ||
+          parsedRank < 1
+        ) {
+          return res.status(400).json({
+            message: `Invalid rank reward key: ${rankKey}`,
+          });
+        }
+
+        if (
+          Number.isNaN(parsedReward) ||
+          parsedReward < 0
+        ) {
+          return res.status(400).json({
+            message: `Invalid reward amount for rank ${rankKey}`,
+          });
+        }
+
+        formattedRankRewards[parsedRank] =
+          Math.round(parsedReward * 100) / 100;
+      }
+
+      const tournament = await Tournament.findById(
+        req.params.id
+      );
 
       if (!tournament) {
         return res.status(404).json({
@@ -801,22 +857,31 @@ router.put(
         });
       }
 
-      if (
-        tournament.status !== "Completed"
-      ) {
+      if (tournament.status !== "Completed") {
         return res.status(400).json({
           message:
             "Tournament must be completed before publishing results",
         });
       }
 
-      if (
-        tournament.joinedPlayers.length ===
-        0
-      ) {
+      if (tournament.joinedPlayers.length === 0) {
         return res.status(400).json({
           message:
             "No players joined this tournament",
+        });
+      }
+
+      const existingPaidReward =
+        tournament.results.some(
+          (result) =>
+            result.rewardPaid === true ||
+            result.rewardStatus === "approved"
+        );
+
+      if (existingPaidReward) {
+        return res.status(400).json({
+          message:
+            "Results cannot be changed because one or more rewards have already been approved",
         });
       }
 
@@ -824,40 +889,27 @@ router.put(
       const usedRanks = new Set();
       const formattedResults = [];
 
-      let totalPrizeAmount = 0;
+      let totalPendingPrize = 0;
 
       for (const result of results) {
         if (
           !result.userId ||
           result.rank === undefined ||
-          result.kills === undefined ||
-          result.prizeAmount === undefined
+          result.kills === undefined
         ) {
           return res.status(400).json({
             message:
-              "Every result requires userId, rank, kills and prizeAmount",
+              "Every result requires userId, rank and kills",
           });
         }
 
-        const userId = String(
-          result.userId
-        );
-
+        const userId = String(result.userId).trim();
         const rank = Number(result.rank);
         const kills = Number(result.kills);
 
-        const prizeAmount = Number(
-          result.prizeAmount
-        );
-
-        if (
-          Number.isNaN(rank) ||
-          Number.isNaN(kills) ||
-          Number.isNaN(prizeAmount)
-        ) {
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
           return res.status(400).json({
-            message:
-              "Rank, kills and prize amount must be numbers",
+            message: `Invalid user ID: ${userId}`,
           });
         }
 
@@ -881,13 +933,6 @@ router.put(
           });
         }
 
-        if (prizeAmount < 0) {
-          return res.status(400).json({
-            message:
-              "Prize amount cannot be negative",
-          });
-        }
-
         if (usedUserIds.has(userId)) {
           return res.status(400).json({
             message: `Duplicate player found: ${userId}`,
@@ -903,8 +948,7 @@ router.put(
         const joinedPlayer =
           tournament.joinedPlayers.find(
             (player) =>
-              player.userId.toString() ===
-              userId
+              player.userId.toString() === userId
           );
 
         if (!joinedPlayer) {
@@ -913,40 +957,72 @@ router.put(
           });
         }
 
+        const killRewardAmount =
+          Math.round(
+            kills *
+              parsedKillRewardPerKill *
+              100
+          ) / 100;
+
+        const winnerRewardAmount =
+          formattedRankRewards[rank] || 0;
+
+        const prizeAmount =
+          Math.round(
+            (killRewardAmount +
+              winnerRewardAmount) *
+              100
+          ) / 100;
+
+        totalPendingPrize =
+          Math.round(
+            (totalPendingPrize + prizeAmount) *
+              100
+          ) / 100;
+
         usedUserIds.add(userId);
         usedRanks.add(rank);
 
-        totalPrizeAmount += prizeAmount;
-
         formattedResults.push({
           userId: joinedPlayer.userId,
-
           freeFireUid:
             joinedPlayer.freeFireUid,
-
           freeFireIgn:
             joinedPlayer.freeFireIgn,
 
           rank,
           kills,
+
+          killRewardAmount,
+          winnerRewardAmount,
           prizeAmount,
+
           isWinner: rank === 1,
+          isDisqualified: false,
+
+          rewardStatus: "pending",
+          rewardPaid: false,
+          rewardNote: "",
+
+          verifiedBy: null,
+          verifiedAt: null,
+
+          killRewardTransactionId: null,
+          winnerRewardTransactionId: null,
         });
       }
 
       if (
-        totalPrizeAmount >
-        tournament.prizePool
+        totalPendingPrize >
+        Number(tournament.prizePool)
       ) {
         return res.status(400).json({
           message:
-            "Total prize amount cannot exceed tournament prize pool",
+            "Total pending reward cannot exceed tournament prize pool",
 
-          prizePool:
-            tournament.prizePool,
-
+          prizePool: tournament.prizePool,
           submittedPrizeTotal:
-            totalPrizeAmount,
+            totalPendingPrize,
         });
       }
 
@@ -954,32 +1030,30 @@ router.put(
         (a, b) => a.rank - b.rank
       );
 
-      tournament.results =
-        formattedResults;
-
+      tournament.results = formattedResults;
       tournament.resultPublished = true;
 
       await tournament.save();
 
       return res.status(200).json({
+        success: true,
+
         message:
-          "Tournament results published successfully",
+          "Tournament results published. All rewards are pending admin verification.",
 
         tournament: {
           id: tournament._id,
           title: tournament.title,
           status: tournament.status,
-
+          prizePool: tournament.prizePool,
           resultPublished:
             tournament.resultPublished,
-
-          prizePool:
-            tournament.prizePool,
-
-          distributedPrize:
-            totalPrizeAmount,
+          killRewardPerKill:
+            parsedKillRewardPerKill,
+          totalPendingPrize,
         },
 
+        rankRewards: formattedRankRewards,
         results: tournament.results,
       });
     } catch (error) {
@@ -989,6 +1063,7 @@ router.put(
       );
 
       return res.status(500).json({
+        success: false,
         message:
           "Server error while publishing tournament results",
         error: error.message,
@@ -996,7 +1071,6 @@ router.put(
     }
   }
 );
-
 // =====================================
 // GET ALL TOURNAMENT RESULTS
 // =====================================
@@ -1227,4 +1301,684 @@ router.get(
   }
 );
 
+// pending reward route code
+// =====================================
+// ADMIN GET ALL PENDING REWARDS
+// =====================================
+router.get(
+  "/admin/pending-rewards",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    try {
+      const tournaments = await Tournament.find({
+        results: {
+          $elemMatch: {
+            rewardStatus: "pending",
+          },
+        },
+      })
+        .select(
+          "title game mode map date time status prizePool results"
+        )
+        .sort({ updatedAt: -1 });
+
+      const pendingRewards = [];
+
+      tournaments.forEach((tournament) => {
+        tournament.results.forEach((result) => {
+          if (result.rewardStatus === "pending") {
+            pendingRewards.push({
+              tournamentId: tournament._id,
+              tournamentTitle: tournament.title,
+              game: tournament.game,
+              mode: tournament.mode,
+              map: tournament.map,
+              date: tournament.date,
+              time: tournament.time,
+              tournamentStatus: tournament.status,
+              prizePool: tournament.prizePool,
+
+              userId: result.userId,
+              freeFireUid: result.freeFireUid,
+              freeFireIgn: result.freeFireIgn,
+
+              rank: result.rank,
+              kills: result.kills,
+              isWinner: result.isWinner,
+
+              killRewardAmount:
+                result.killRewardAmount || 0,
+
+              winnerRewardAmount:
+                result.winnerRewardAmount || 0,
+
+              prizeAmount:
+                result.prizeAmount || 0,
+
+              rewardStatus:
+                result.rewardStatus,
+
+              rewardPaid:
+                result.rewardPaid,
+
+              isDisqualified:
+                result.isDisqualified,
+
+              rewardNote:
+                result.rewardNote || "",
+            });
+          }
+        });
+      });
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Pending rewards fetched successfully",
+        count: pendingRewards.length,
+        pendingRewards,
+      });
+    } catch (error) {
+      console.error(
+        "Get pending rewards error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Server error while fetching pending rewards",
+        error: error.message,
+      });
+    }
+  }
+);
+// =====================================
+// ADMIN APPROVE PLAYER REWARD
+// WALLET CREDIT AFTER VERIFICATION
+// =====================================
+router.put(
+  "/admin/rewards/:tournamentId/:userId/approve",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const session = await mongoose.startSession();
+
+    try {
+      let responseData = null;
+
+      await session.withTransaction(async () => {
+        const { tournamentId, userId } = req.params;
+
+        if (
+          !mongoose.Types.ObjectId.isValid(tournamentId) ||
+          !mongoose.Types.ObjectId.isValid(userId)
+        ) {
+          throw createRouteError(
+            400,
+            "Invalid tournament ID or user ID"
+          );
+        }
+
+        const tournament = await Tournament.findById(
+          tournamentId
+        ).session(session);
+
+        if (!tournament) {
+          throw createRouteError(
+            404,
+            "Tournament not found"
+          );
+        }
+
+        const result = tournament.results.find(
+          (item) =>
+            item.userId.toString() === userId
+        );
+
+        if (!result) {
+          throw createRouteError(
+            404,
+            "Player reward result not found"
+          );
+        }
+
+        if (result.isDisqualified) {
+          throw createRouteError(
+            400,
+            "Disqualified player reward cannot be approved"
+          );
+        }
+
+        if (
+          result.rewardStatus === "approved" ||
+          result.rewardPaid === true
+        ) {
+          throw createRouteError(
+            400,
+            "This reward has already been approved"
+          );
+        }
+
+        if (result.rewardStatus === "rejected") {
+          throw createRouteError(
+            400,
+            "Rejected reward cannot be approved"
+          );
+        }
+
+        const user = await User.findById(
+          userId
+        ).session(session);
+
+        if (!user) {
+          throw createRouteError(
+            404,
+            "User not found"
+          );
+        }
+
+        const killRewardAmount =
+          Math.round(
+            Number(result.killRewardAmount || 0) * 100
+          ) / 100;
+
+        const winnerRewardAmount =
+          Math.round(
+            Number(result.winnerRewardAmount || 0) * 100
+          ) / 100;
+
+        const totalReward =
+          Math.round(
+            (killRewardAmount + winnerRewardAmount) *
+              100
+          ) / 100;
+
+        if (totalReward <= 0) {
+          throw createRouteError(
+            400,
+            "Reward amount must be greater than zero"
+          );
+        }
+
+        const balanceBefore =
+          Math.round(
+            Number(user.walletBalance || 0) * 100
+          ) / 100;
+
+        let runningBalance = balanceBefore;
+
+        let killTransaction = null;
+        let winnerTransaction = null;
+
+        if (killRewardAmount > 0) {
+          const killBalanceAfter =
+            Math.round(
+              (runningBalance + killRewardAmount) *
+                100
+            ) / 100;
+
+          const createdKillTransactions =
+            await Transaction.create(
+              [
+                {
+                  userId: user._id,
+                  tournamentId: tournament._id,
+                  transactionType: "kill_reward",
+                  amount: killRewardAmount,
+                  balanceBefore: runningBalance,
+                  balanceAfter: killBalanceAfter,
+                  status: "success",
+                  description: `Kill reward approved for ${tournament.title}`,
+                  processedBy: req.user.userId,
+                },
+              ],
+              { session }
+            );
+
+          killTransaction =
+            createdKillTransactions[0];
+
+          runningBalance = killBalanceAfter;
+        }
+
+        if (winnerRewardAmount > 0) {
+          const winnerBalanceAfter =
+            Math.round(
+              (runningBalance +
+                winnerRewardAmount) *
+                100
+            ) / 100;
+
+          const createdWinnerTransactions =
+            await Transaction.create(
+              [
+                {
+                  userId: user._id,
+                  tournamentId: tournament._id,
+                  transactionType:
+                    "winner_reward",
+                  amount: winnerRewardAmount,
+                  balanceBefore: runningBalance,
+                  balanceAfter:
+                    winnerBalanceAfter,
+                  status: "success",
+                  description: `Rank reward approved for ${tournament.title}`,
+                  processedBy: req.user.userId,
+                },
+              ],
+              { session }
+            );
+
+          winnerTransaction =
+            createdWinnerTransactions[0];
+
+          runningBalance = winnerBalanceAfter;
+        }
+
+        user.walletBalance = runningBalance;
+
+        user.totalKillRewards =
+          Math.round(
+            (Number(user.totalKillRewards || 0) +
+              killRewardAmount) *
+              100
+          ) / 100;
+
+        user.totalWinnerRewards =
+          Math.round(
+            (Number(
+              user.totalWinnerRewards || 0
+            ) +
+              winnerRewardAmount) *
+              100
+          ) / 100;
+
+        user.totalWinnings =
+          Math.round(
+            (Number(user.totalWinnings || 0) +
+              totalReward) *
+              100
+          ) / 100;
+
+        await user.save({ session });
+
+        result.rewardStatus = "approved";
+        result.rewardPaid = true;
+        result.isDisqualified = false;
+        result.rewardNote =
+          req.body?.rewardNote
+            ? String(req.body.rewardNote).trim()
+            : "Reward approved by admin";
+
+        result.verifiedBy = req.user.userId;
+        result.verifiedAt = new Date();
+
+        result.killRewardTransactionId =
+          killTransaction
+            ? killTransaction._id
+            : null;
+
+        result.winnerRewardTransactionId =
+          winnerTransaction
+            ? winnerTransaction._id
+            : null;
+
+        await tournament.save({ session });
+
+        responseData = {
+          success: true,
+          message:
+            "Reward approved and added to user wallet successfully",
+
+          tournament: {
+            id: tournament._id,
+            title: tournament.title,
+          },
+
+          player: {
+            userId: user._id,
+            freeFireUid: result.freeFireUid,
+            freeFireIgn: result.freeFireIgn,
+            rank: result.rank,
+            kills: result.kills,
+          },
+
+          reward: {
+            killRewardAmount,
+            winnerRewardAmount,
+            totalReward,
+            rewardStatus: result.rewardStatus,
+            rewardPaid: result.rewardPaid,
+          },
+
+          wallet: {
+            balanceBefore,
+            balanceAfter: runningBalance,
+          },
+
+          transactions: {
+            killRewardTransaction:
+              killTransaction,
+            winnerRewardTransaction:
+              winnerTransaction,
+          },
+        };
+      });
+
+      return res.status(200).json(responseData);
+    } catch (error) {
+      console.error(
+        "Approve reward error:",
+        error
+      );
+
+      if (error.statusCode) {
+        return res
+          .status(error.statusCode)
+          .json({
+            success: false,
+            message: error.message,
+            ...(error.extraData || {}),
+          });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Server error while approving reward",
+        error: error.message,
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+);
+
+// =====================================
+// ADMIN REJECT PLAYER REWARD
+// NO WALLET CREDIT
+// =====================================
+router.put(
+  "/admin/rewards/:tournamentId/:userId/reject",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const session = await mongoose.startSession();
+
+    try {
+      let responseData = null;
+
+      await session.withTransaction(async () => {
+        const { tournamentId, userId } = req.params;
+
+        const {
+          rewardNote,
+          isDisqualified,
+        } = req.body || {};
+
+        if (
+          !mongoose.Types.ObjectId.isValid(tournamentId) ||
+          !mongoose.Types.ObjectId.isValid(userId)
+        ) {
+          throw createRouteError(
+            400,
+            "Invalid tournament ID or user ID"
+          );
+        }
+
+        if (
+          !rewardNote ||
+          !String(rewardNote).trim()
+        ) {
+          throw createRouteError(
+            400,
+            "Reject reason is required"
+          );
+        }
+
+        const tournament = await Tournament.findById(
+          tournamentId
+        ).session(session);
+
+        if (!tournament) {
+          throw createRouteError(
+            404,
+            "Tournament not found"
+          );
+        }
+
+        const result = tournament.results.find(
+          (item) =>
+            item.userId.toString() === userId
+        );
+
+        if (!result) {
+          throw createRouteError(
+            404,
+            "Player reward result not found"
+          );
+        }
+
+        if (
+          result.rewardStatus === "approved" ||
+          result.rewardPaid === true
+        ) {
+          throw createRouteError(
+            400,
+            "Approved reward cannot be rejected"
+          );
+        }
+
+        if (result.rewardStatus === "rejected") {
+          throw createRouteError(
+            400,
+            "This reward has already been rejected"
+          );
+        }
+
+        result.rewardStatus = "rejected";
+        result.rewardPaid = false;
+
+        result.isDisqualified =
+          isDisqualified === true;
+
+        result.rewardNote =
+          String(rewardNote).trim();
+
+        result.verifiedBy =
+          req.user.userId;
+
+        result.verifiedAt =
+          new Date();
+
+        result.killRewardTransactionId =
+          null;
+
+        result.winnerRewardTransactionId =
+          null;
+
+        await tournament.save({
+          session,
+        });
+
+        responseData = {
+          success: true,
+
+          message:
+            "Reward rejected successfully",
+
+          tournament: {
+            id: tournament._id,
+            title: tournament.title,
+          },
+
+          player: {
+            userId: result.userId,
+            freeFireUid:
+              result.freeFireUid,
+            freeFireIgn:
+              result.freeFireIgn,
+            rank: result.rank,
+            kills: result.kills,
+          },
+
+          reward: {
+            killRewardAmount:
+              result.killRewardAmount,
+
+            winnerRewardAmount:
+              result.winnerRewardAmount,
+
+            totalReward:
+              result.prizeAmount,
+
+            rewardStatus:
+              result.rewardStatus,
+
+            rewardPaid:
+              result.rewardPaid,
+
+            isDisqualified:
+              result.isDisqualified,
+
+            rewardNote:
+              result.rewardNote,
+
+            verifiedBy:
+              result.verifiedBy,
+
+            verifiedAt:
+              result.verifiedAt,
+          },
+        };
+      });
+
+      return res
+        .status(200)
+        .json(responseData);
+    } catch (error) {
+      console.error(
+        "Reject reward error:",
+        error
+      );
+
+      if (error.statusCode) {
+        return res
+          .status(error.statusCode)
+          .json({
+            success: false,
+            message: error.message,
+            ...(error.extraData || {}),
+          });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Server error while rejecting reward",
+        error: error.message,
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+);
+// =====================================
+// LOGGED-IN USER REWARD HISTORY
+// =====================================
+router.get(
+  "/my-reward-history",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const tournaments = await Tournament.find({
+        results: {
+          $elemMatch: {
+            userId: req.user.userId,
+          },
+        },
+      })
+        .select(
+          "title game mode map date time status results"
+        )
+        .sort({ updatedAt: -1 });
+
+      const rewardHistory = [];
+
+      tournaments.forEach((tournament) => {
+        const playerResult =
+          tournament.results.find(
+            (result) =>
+              result.userId.toString() ===
+              req.user.userId.toString()
+          );
+
+        if (playerResult) {
+          rewardHistory.push({
+            tournamentId: tournament._id,
+            tournamentTitle: tournament.title,
+            game: tournament.game,
+            mode: tournament.mode,
+            map: tournament.map,
+            date: tournament.date,
+            time: tournament.time,
+            tournamentStatus:
+              tournament.status,
+
+            rank: playerResult.rank,
+            kills: playerResult.kills,
+            isWinner:
+              playerResult.isWinner,
+
+            killRewardAmount:
+              playerResult.killRewardAmount || 0,
+
+            winnerRewardAmount:
+              playerResult.winnerRewardAmount || 0,
+
+            totalReward:
+              playerResult.prizeAmount || 0,
+
+            rewardStatus:
+              playerResult.rewardStatus,
+
+            rewardPaid:
+              playerResult.rewardPaid,
+
+            isDisqualified:
+              playerResult.isDisqualified,
+
+            rewardNote:
+              playerResult.rewardNote || "",
+
+            verifiedAt:
+              playerResult.verifiedAt || null,
+          });
+        }
+      });
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Reward history fetched successfully",
+        count: rewardHistory.length,
+        rewardHistory,
+      });
+    } catch (error) {
+      console.error(
+        "Get reward history error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Server error while fetching reward history",
+        error: error.message,
+      });
+    }
+  }
+);
 module.exports = router;

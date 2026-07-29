@@ -1,8 +1,8 @@
 const mongoose = require("mongoose");
 
-// Tournament model আগে register করা হচ্ছে,
-// যাতে transaction history-তে populate কাজ করে।
+// Register referenced models for populate.
 require("./tournament");
+require("./withdrawRequest");
 
 const transactionSchema = new mongoose.Schema(
   {
@@ -15,6 +15,12 @@ const transactionSchema = new mongoose.Schema(
     tournamentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Tournament",
+      default: null,
+    },
+
+    withdrawRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "WithdrawRequest",
       default: null,
     },
 

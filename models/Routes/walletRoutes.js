@@ -4,7 +4,9 @@ const mongoose = require("mongoose");
 const User = require("../user");
 const Transaction = require("../transaction");
 const WithdrawRequest = require("../withdrawRequest");
-
+const {
+  processReferralReward,
+} = require("../referralRewardService");
 const authMiddleware = require("../../middleware/authMiddleware");
 const adminMiddleware = require("../../middleware/adminMiddleware");
 
@@ -335,7 +337,7 @@ router.post(
         Number(user.totalDeposited || 0) + creditAmount;
 
       await user.save();
-
+await processReferralReward(user._id);
       const transaction = await Transaction.create({
         userId: user._id,
         transactionType: "admin_credit",
