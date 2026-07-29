@@ -4,6 +4,9 @@ const mongoose = require("mongoose");
 const Tournament = require("../tournament");
 const User = require("../user");
 const Transaction = require("../transaction");
+const {
+  processReferralReward,
+} = require("../referralRewardService");
 
 const authMiddleware = require("../../middleware/authMiddleware");
 const adminMiddleware = require("../../middleware/adminMiddleware");
@@ -25,6 +28,76 @@ const createRouteError = (
 
   return error;
 };
+
+// =====================================
+// PROCESS REFERRALS AFTER COMPLETION
+// =====================================
+const processCompletedTournamentReferrals =
+  async (tournament) => {
+    const summary = {
+      checked: 0,
+      newlyRewarded: 0,
+      stillPending: 0,
+      skipped: 0,
+      failed: 0,
+    };
+
+    const joinedUserIds = [
+      ...new Set(
+        (tournament.joinedPlayers || [])
+          .map((player) =>
+            player.userId
+              ? player.userId.toString()
+              : null
+          )
+          .filter(Boolean)
+      ),
+    ];
+
+    if (joinedUserIds.length === 0) {
+      return summary;
+    }
+
+    const referredUsers = await User.find({
+      _id: {
+        $in: joinedUserIds,
+      },
+      referredBy: {
+        $ne: null,
+      },
+    }).select("_id");
+
+    for (const referredUser of referredUsers) {
+      summary.checked += 1;
+
+      const result =
+        await processReferralReward(
+          referredUser._id
+        );
+
+      if (!result || result.success === false) {
+        summary.failed += 1;
+        continue;
+      }
+
+      if (result.rewarded === true) {
+        summary.newlyRewarded += 1;
+        continue;
+      }
+
+      if (
+        result.reason ===
+        "Referral conditions are not completed"
+      ) {
+        summary.stillPending += 1;
+        continue;
+      }
+
+      summary.skipped += 1;
+    }
+
+    return summary;
+  };
 
 // =====================================
 // CREATE TOURNAMENT — ADMIN ONLY
@@ -744,6 +817,30 @@ router.put(
 
       await tournament.save();
 
+      let referralProcessing = {
+        checked: 0,
+        newlyRewarded: 0,
+        stillPending: 0,
+        skipped: 0,
+        failed: 0,
+      };
+
+      try {
+        referralProcessing =
+          await processCompletedTournamentReferrals(
+            tournament
+          );
+      } catch (referralError) {
+        console.error(
+          "Tournament referral processing error:",
+          referralError
+        );
+
+        referralProcessing.failed =
+          (tournament.joinedPlayers || [])
+            .length;
+      }
+
       return res.status(200).json({
         message:
           "Tournament completed successfully",
@@ -753,6 +850,8 @@ router.put(
           title: tournament.title,
           status: tournament.status,
         },
+
+        referralProcessing,
       });
     } catch (error) {
       console.error(
