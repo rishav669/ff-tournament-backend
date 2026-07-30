@@ -4,15 +4,20 @@ const mongoose = require("mongoose");
 const User = require("../user");
 const Transaction = require("../transaction");
 const WithdrawRequest = require("../withdrawRequest");
+const Settings = require("../settings");
+
 const {
   processReferralReward,
 } = require("../referralRewardService");
+
+const {
+  createActivityEvent,
+} = require("../activityEventService");
 const authMiddleware = require("../../middleware/authMiddleware");
 const adminMiddleware = require("../../middleware/adminMiddleware");
 
 const router = express.Router();
 
-const MINIMUM_WITHDRAW_AMOUNT = 50;
 
 // ========================================
 // HELPER: VALIDATE MONGODB OBJECT ID
@@ -276,7 +281,267 @@ router.put("/update-upi", authMiddleware, async (req, res) => {
     });
   }
 });
+// ========================================
+// ADMIN CONFIRM REAL USER DEPOSIT
+// POST /api/wallet/admin/deposit
+// ========================================
+router.post(
+  "/admin/deposit",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const session =
+      await mongoose.startSession();
 
+    let responseData = null;
+    let referralUserId = null;
+    let depositActivityEventData = null;
+
+    try {
+      const {
+        userId,
+        amount,
+        description,
+        paymentReference,
+      } = req.body;
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          message: "User ID is required",
+        });
+      }
+
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid user ID",
+        });
+      }
+
+      const depositAmount =
+        getValidAmount(amount);
+
+      if (!depositAmount) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Deposit amount must be greater than zero",
+        });
+      }
+
+      const cleanPaymentReference =
+        paymentReference &&
+        String(paymentReference).trim()
+          ? String(paymentReference).trim()
+          : "";
+
+      const settings =
+        await Settings.findOne();
+
+      if (
+        settings &&
+        settings.depositEnabled === false
+      ) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Deposits are currently disabled",
+        });
+      }
+
+      const minimumDeposit = Number(
+        settings?.minimumDeposit || 0
+      );
+
+      if (
+        depositAmount < minimumDeposit
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            `Minimum deposit amount is ₹${minimumDeposit}`,
+          minimumDeposit,
+        });
+      }
+
+      await session.withTransaction(
+        async () => {
+          const user = await User.findById(
+            userId
+          ).session(session);
+
+          if (!user) {
+            const error = new Error(
+              "User not found"
+            );
+
+            error.statusCode = 404;
+            throw error;
+          }
+
+          if (user.isBlocked) {
+            const error = new Error(
+              "Blocked user wallet cannot receive a deposit"
+            );
+
+            error.statusCode = 403;
+            throw error;
+          }
+
+          const balanceBefore = Number(
+            user.walletBalance || 0
+          );
+
+          const balanceAfter =
+            balanceBefore + depositAmount;
+
+          const totalDepositedBefore =
+            Number(
+              user.totalDeposited || 0
+            );
+
+          const totalDepositedAfter =
+            totalDepositedBefore +
+            depositAmount;
+
+          user.walletBalance =
+            balanceAfter;
+
+          user.totalDeposited =
+            totalDepositedAfter;
+
+          await user.save({
+            session,
+          });
+
+          const [transaction] =
+            await Transaction.create(
+              [
+                {
+                  userId: user._id,
+                  transactionType:
+                    "deposit",
+                  amount: depositAmount,
+                  balanceBefore,
+                  balanceAfter,
+                  status: "success",
+                  description:
+                    description &&
+                    String(
+                      description
+                    ).trim()
+                      ? String(
+                          description
+                        ).trim()
+                      : "Deposit verified by admin",
+                  processedBy:
+                    req.user.userId,
+                },
+              ],
+              {
+                session,
+              }
+            );
+
+          referralUserId = user._id;
+
+          depositActivityEventData = {
+            user: {
+              _id: user._id,
+              name: user.name,
+            },
+            eventType: "deposit",
+            amount: depositAmount,
+            eventKey:
+              `deposit:${transaction._id}`,
+            transactionId:
+              transaction._id,
+            metadata: {
+              paymentReference:
+                cleanPaymentReference,
+              totalDepositedBefore,
+              totalDepositedAfter,
+            },
+          };
+
+          responseData = {
+            success: true,
+            message:
+              "Deposit confirmed and added to wallet successfully",
+
+            wallet: {
+              userId: user._id,
+              name: user.name,
+              previousBalance:
+                balanceBefore,
+              depositedAmount:
+                depositAmount,
+              currentBalance:
+                balanceAfter,
+              totalDeposited:
+                totalDepositedAfter,
+            },
+
+            paymentReference:
+              cleanPaymentReference ||
+              null,
+
+            transaction,
+          };
+        }
+      );
+
+      if (referralUserId) {
+        await processReferralReward(
+          referralUserId
+        );
+      }
+
+      if (
+        depositActivityEventData
+      ) {
+        try {
+          await createActivityEvent(
+            depositActivityEventData
+          );
+        } catch (activityError) {
+          console.error(
+            "Deposit activity event error:",
+            activityError
+          );
+        }
+      }
+
+      return res
+        .status(200)
+        .json(responseData);
+    } catch (error) {
+      console.error(
+        "Admin deposit error:",
+        error
+      );
+
+      if (error.statusCode) {
+        return res
+          .status(error.statusCode)
+          .json({
+            success: false,
+            message: error.message,
+          });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Failed to confirm deposit",
+        error: error.message,
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+);
 // ========================================
 // ADMIN ADD MONEY TO USER WALLET
 // POST /api/wallet/admin/credit
@@ -333,13 +598,9 @@ router.post(
 
       user.walletBalance = balanceAfter;
 
-      user.totalDeposited =
-        Number(user.totalDeposited || 0) + creditAmount;
-
       await user.save();
-await processReferralReward(user._id);
+
       const transaction = await Transaction.create({
-        userId: user._id,
         transactionType: "admin_credit",
         amount: creditAmount,
         balanceBefore,
@@ -496,10 +757,33 @@ router.post("/withdraw", authMiddleware, async (req, res) => {
       });
     }
 
-    if (withdrawAmount < MINIMUM_WITHDRAW_AMOUNT) {
+       const settings =
+      await Settings.findOne();
+
+    if (
+      settings &&
+      settings.withdrawalEnabled === false
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Withdrawals are currently disabled",
+      });
+    }
+
+    const minimumWithdrawal = Number(
+      settings?.minimumWithdrawal ?? 100
+    );
+
+    if (
+      withdrawAmount <
+      minimumWithdrawal
+    ) {
       return res.status(400).json({
         success: false,
-        message: `Minimum withdrawal amount is ₹${MINIMUM_WITHDRAW_AMOUNT}`,
+        message:
+          `Minimum withdrawal amount is ₹${minimumWithdrawal}`,
+        minimumWithdrawal,
       });
     }
 
@@ -770,7 +1054,29 @@ router.put(
             },
           }
         );
-
+      try {
+        await createActivityEvent({
+          user: {
+            _id: user._id,
+            name: user.name,
+          },
+          eventType: "withdrawal",
+          amount: Number(
+            withdrawRequest.amount
+          ),
+          eventKey:
+            `withdrawal:${withdrawRequest._id}`,
+          transactionId:
+            transaction?._id || null,
+          withdrawRequestId:
+            withdrawRequest._id,
+        });
+      } catch (activityError) {
+        console.error(
+          "Withdrawal activity event error:",
+          activityError
+        );
+      }
       return res.status(200).json({
         success: true,
         message: "Withdrawal approved successfully",

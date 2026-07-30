@@ -34,6 +34,7 @@ const NUMBER_RULES = {
   },
   withdrawalFee: {
     minimum: 0,
+        maximum: 100,
     integer: false,
   },
   withdrawalTimeHours: {
@@ -580,7 +581,16 @@ router.put(
             message: `${field} must be a number greater than or equal to ${rule.minimum}`,
           });
         }
-
+      if (
+        rule.maximum !== undefined &&
+        value > rule.maximum
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            `${field} must be a number less than or equal to ${rule.maximum}`,
+        });
+      }
         if (rule.integer && !Number.isInteger(value)) {
           return res.status(400).json({
             success: false,

@@ -4,7 +4,11 @@ const mongoose = require("mongoose");
 const User = require("../user");
 const Transaction = require("../transaction");
 const WithdrawRequest = require("../withdrawRequest");
+const Settings = require("../settings");
 
+const {
+  createActivityEvent,
+} = require("../activityEventService");
 const authMiddleware = require("../../middleware/authMiddleware");
 const adminMiddleware = require("../../middleware/adminMiddleware");
 
@@ -91,7 +95,67 @@ router.post("/request", authMiddleware, async (req, res) => {
         "Please enter a valid UPI ID"
       );
     }
+    const settings =
+      await Settings.findOne();
 
+    if (
+      settings &&
+      settings.withdrawalEnabled === false
+    ) {
+      throw createRouteError(
+        403,
+        "Withdrawals are currently disabled"
+      );
+    }
+
+    const minimumWithdrawal = roundMoney(
+      settings?.minimumWithdrawal ?? 100
+    );
+
+    if (
+      withdrawalAmount <
+      minimumWithdrawal
+    ) {
+      throw createRouteError(
+        400,
+        `Minimum withdrawal amount is ₹${minimumWithdrawal}`,
+        {
+          minimumWithdrawal,
+        }
+      );
+    }
+
+    const feePercentage = Number(
+      settings?.withdrawalFee ?? 0
+    );
+
+    if (
+      !Number.isFinite(feePercentage) ||
+      feePercentage < 0 ||
+      feePercentage > 100
+    ) {
+      throw createRouteError(
+        500,
+        "Withdrawal fee setting must be between 0 and 100"
+      );
+    }
+
+    const feeAmount = roundMoney(
+      (withdrawalAmount *
+        feePercentage) /
+        100
+    );
+
+    const payoutAmount = roundMoney(
+      withdrawalAmount - feeAmount
+    );
+
+    if (payoutAmount <= 0) {
+      throw createRouteError(
+        400,
+        "Withdrawal payout amount must be greater than zero"
+      );
+    }
     let responseData = null;
 
     await session.withTransaction(async () => {
@@ -159,11 +223,17 @@ router.post("/request", authMiddleware, async (req, res) => {
         await WithdrawRequest.create(
           [
             {
-              userId: user._id,
-              amount: withdrawalAmount,
-              upiId: normalizedUpiId,
-              status: "pending",
-            },
+  userId: user._id,
+  amount: withdrawalAmount,
+  feePercentageApplied:
+    feePercentage,
+  feeAmount,
+  payoutAmount,
+  minimumWithdrawalApplied:
+    minimumWithdrawal,
+  upiId: normalizedUpiId,
+  status: "pending",
+},
           ],
           {
             session,
@@ -198,20 +268,32 @@ router.post("/request", authMiddleware, async (req, res) => {
         createdTransactions[0];
 
       responseData = {
-        withdrawRequest: {
-          id: withdrawRequest._id,
-          amount: withdrawRequest.amount,
-          upiId: withdrawRequest.upiId,
-          status: withdrawRequest.status,
-          createdAt:
-            withdrawRequest.createdAt,
-        },
+withdrawRequest: {
+  id: withdrawRequest._id,
+  amount: withdrawRequest.amount,
+  feePercentageApplied:
+    withdrawRequest.feePercentageApplied,
+  feeAmount:
+    withdrawRequest.feeAmount,
+  payoutAmount:
+    withdrawRequest.payoutAmount,
+  minimumWithdrawalApplied:
+    withdrawRequest.minimumWithdrawalApplied,
+  upiId: withdrawRequest.upiId,
+  status: withdrawRequest.status,
+  createdAt:
+    withdrawRequest.createdAt,
+},
 
-        wallet: {
-          balanceBefore,
-          deductedAmount: withdrawalAmount,
-          walletBalance: balanceAfter,
-        },
+       wallet: {
+  balanceBefore,
+  deductedAmount: withdrawalAmount,
+  feePercentageApplied:
+    feePercentage,
+  feeAmount,
+  payoutAmount,
+  walletBalance: balanceAfter,
+},
 
         transactionId: transaction._id,
       };
@@ -221,7 +303,7 @@ router.post("/request", authMiddleware, async (req, res) => {
       message:
         "Withdrawal request submitted successfully",
       processingMessage:
-        "Your withdrawal is pending and may take up to 24 hours",
+  `₹${withdrawalAmount} reserved. After ${feePercentage}% fee (₹${feeAmount}), ₹${payoutAmount} will be paid after admin approval.`,
       ...responseData,
     });
   } catch (error) {
@@ -329,6 +411,33 @@ router.get("/my-history", authMiddleware, async (req, res) => {
       (withdrawal) => ({
         id: withdrawal._id,
         amount: withdrawal.amount,
+                grossAmount:
+          withdrawal.amount,
+        feePercentageApplied:
+          withdrawal
+            .feePercentageApplied ?? 0,
+        feeAmount:
+          withdrawal.feeAmount ?? 0,
+        payoutAmount:
+          Number(
+            withdrawal.payoutAmount
+          ) > 0
+            ? roundMoney(
+                withdrawal.payoutAmount
+              )
+            : roundMoney(
+                Number(
+                  withdrawal.amount
+                ) -
+                  Number(
+                    withdrawal.feeAmount ||
+                      0
+                  )
+              ),
+        minimumWithdrawalApplied:
+          withdrawal
+            .minimumWithdrawalApplied ??
+          null,
         upiId: withdrawal.upiId,
         status: withdrawal.status,
         adminNote: withdrawal.adminNote,
@@ -509,6 +618,34 @@ router.get(
         (withdrawal) => ({
           id: withdrawal._id,
           amount: withdrawal.amount,
+                    grossAmount:
+            withdrawal.amount,
+          feePercentageApplied:
+            withdrawal
+              .feePercentageApplied ??
+            0,
+          feeAmount:
+            withdrawal.feeAmount ?? 0,
+          payoutAmount:
+            Number(
+              withdrawal.payoutAmount
+            ) > 0
+              ? roundMoney(
+                  withdrawal.payoutAmount
+                )
+              : roundMoney(
+                  Number(
+                    withdrawal.amount
+                  ) -
+                    Number(
+                      withdrawal.feeAmount ||
+                        0
+                    )
+                ),
+          minimumWithdrawalApplied:
+            withdrawal
+              .minimumWithdrawalApplied ??
+            null,
           upiId: withdrawal.upiId,
           status: withdrawal.status,
           adminNote: withdrawal.adminNote,
@@ -649,8 +786,93 @@ router.patch(
             `Withdrawal transaction is already ${withdrawTransaction.status}`
           );
         }
+        const approvedGrossAmount =
+          roundMoney(
+            withdrawRequest.amount
+          );
 
+        const approvedFeePercentage =
+          Number(
+            withdrawRequest
+              .feePercentageApplied ?? 0
+          );
+
+        if (
+          !Number.isFinite(
+            approvedFeePercentage
+          ) ||
+          approvedFeePercentage < 0 ||
+          approvedFeePercentage > 100
+        ) {
+          throw createRouteError(
+            500,
+            "Invalid withdrawal fee percentage snapshot"
+          );
+        }
+
+        const storedFeeAmount = Number(
+          withdrawRequest.feeAmount
+        );
+
+        const approvedFeeAmount =
+          withdrawRequest.feeAmount !==
+            undefined &&
+          withdrawRequest.feeAmount !==
+            null &&
+          Number.isFinite(
+            storedFeeAmount
+          ) &&
+          storedFeeAmount >= 0
+            ? roundMoney(
+                storedFeeAmount
+              )
+            : roundMoney(
+                (approvedGrossAmount *
+                  approvedFeePercentage) /
+                  100
+              );
+
+        const storedPayoutAmount =
+          Number(
+            withdrawRequest.payoutAmount
+          );
+
+        const approvedPayoutAmount =
+          withdrawRequest.payoutAmount !==
+            undefined &&
+          withdrawRequest.payoutAmount !==
+            null &&
+          Number.isFinite(
+            storedPayoutAmount
+          ) &&
+          storedPayoutAmount > 0
+            ? roundMoney(
+                storedPayoutAmount
+              )
+            : roundMoney(
+                approvedGrossAmount -
+                  approvedFeeAmount
+              );
+
+        if (
+          approvedPayoutAmount <= 0 ||
+          approvedPayoutAmount >
+            approvedGrossAmount
+        ) {
+          throw createRouteError(
+            500,
+            "Invalid withdrawal payout amount"
+          );
+        }
         withdrawRequest.status = "approved";
+                withdrawRequest.amount =
+          approvedGrossAmount;
+        withdrawRequest.feePercentageApplied =
+          approvedFeePercentage;
+        withdrawRequest.feeAmount =
+          approvedFeeAmount;
+        withdrawRequest.payoutAmount =
+          approvedPayoutAmount;
         withdrawRequest.adminNote = adminNote;
         withdrawRequest.processedBy =
           req.user.userId;
@@ -663,7 +885,7 @@ router.patch(
 
         user.totalWithdrawn = roundMoney(
           Number(user.totalWithdrawn || 0) +
-            Number(withdrawRequest.amount)
+                      approvedPayoutAmount
         );
 
         await user.save({
@@ -681,12 +903,41 @@ router.patch(
         await withdrawTransaction.save({
           session,
         });
-
+        activityEventPayload = {
+          user,
+          eventType: "withdrawal",
+          amount:
+            approvedPayoutAmount,
+          eventKey:
+            `withdrawal-approved:${withdrawRequest._id}`,
+          transactionId:
+            withdrawTransaction._id,
+          withdrawRequestId:
+            withdrawRequest._id,
+          metadata: {
+            grossAmount:
+              approvedGrossAmount,
+            feePercentageApplied:
+              approvedFeePercentage,
+            feeAmount:
+              approvedFeeAmount,
+            payoutAmount:
+              approvedPayoutAmount,
+          },
+        };
         responseData = {
           withdrawal: {
             id: withdrawRequest._id,
             userId: withdrawRequest.userId,
             amount: withdrawRequest.amount,
+                        grossAmount:
+              approvedGrossAmount,
+            feePercentageApplied:
+              approvedFeePercentage,
+            feeAmount:
+              approvedFeeAmount,
+            payoutAmount:
+              approvedPayoutAmount,
             upiId: withdrawRequest.upiId,
             status: withdrawRequest.status,
             adminNote:
@@ -719,10 +970,40 @@ router.patch(
           },
         };
       });
+      try {
+        const activityResult =
+          await createActivityEvent(
+            activityEventPayload
+          );
 
+        responseData.activityTicker = {
+          created:
+            activityResult.created,
+          eventId:
+            activityResult.event?._id ||
+            null,
+          amount:
+            responseData.withdrawal
+              .payoutAmount,
+        };
+      } catch (activityError) {
+        console.error(
+          "Withdrawal activity event error:",
+          activityError
+        );
+
+        responseData.activityTicker = {
+          created: false,
+          amount:
+            responseData.withdrawal
+              .payoutAmount,
+          warning:
+            "Withdrawal approved, but ticker event could not be created",
+        };
+      }
       return res.status(200).json({
-        message:
-          "Withdrawal request approved successfully",
+                message:
+          `Withdrawal approved. Gross ₹${responseData.withdrawal.grossAmount}, ${responseData.withdrawal.feePercentageApplied}% fee ₹${responseData.withdrawal.feeAmount}, payout ₹${responseData.withdrawal.payoutAmount}.`,
         ...responseData,
       });
     } catch (error) {

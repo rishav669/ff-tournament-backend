@@ -12,7 +12,11 @@ const adminRoutes = require("./models/Routes/adminRoutes");
 const settingsRoutes = require("./models/Routes/settingsRoutes");
 const coinRoutes = require("./models/Routes/coinRoutes");
 const referralRoutes = require("./models/Routes/referralRoutes");
+const activityRoutes = require("./models/Routes/activityRoutes");
+
 console.log("Referral route imported successfully");
+console.log("Activity route imported successfully");
+
 const app = express();
 
 const PORT = process.env.PORT || 5000;
@@ -41,12 +45,14 @@ app.get("/", (req, res) => {
     message: "Free Fire Tournament API is running",
   });
 });
+
 app.get("/api/test-referral", (req, res) => {
   return res.status(200).json({
     success: true,
     message: "Referral Route Test OK",
   });
 });
+
 // ========================================
 // API ROUTES
 // ========================================
@@ -73,6 +79,8 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/coins", coinRoutes);
 
 app.use("/api/referrals", referralRoutes);
+
+app.use("/api/activity", activityRoutes);
 
 // ========================================
 // 404 ROUTE

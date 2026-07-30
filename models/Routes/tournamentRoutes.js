@@ -8,6 +8,9 @@ const Settings = require("../settings");
 const {
   processReferralReward,
 } = require("../referralRewardService");
+const {
+  createActivityEvent,
+} = require("../activityEventService");
 
 const authMiddleware = require("../../middleware/authMiddleware");
 const adminMiddleware = require("../../middleware/adminMiddleware");
@@ -241,6 +244,7 @@ router.post(
 
     try {
       let joinResponse = null;
+      let activityEventData = null;
 
       await session.withTransaction(async () => {
         const tournament =
@@ -506,6 +510,29 @@ router.post(
 
         await tournament.save({ session });
 
+        activityEventData = {
+          user: {
+            _id: user._id,
+            name: user.name,
+          },
+          eventType: "tournament_join",
+          amount: entryFee,
+          eventKey:
+            `tournament_join:${tournament._id}:${user._id}`,
+          tournamentId: tournament._id,
+          tournamentTitle:
+            tournament.title,
+          transactionId:
+            transaction?._id || null,
+          metadata: {
+            tournamentMode:
+              tournament.mode,
+            tournamentMap:
+              tournament.map,
+            entryFee,
+          },
+        };
+
         joinResponse = {
           message:
             "Tournament joined successfully",
@@ -552,6 +579,19 @@ router.post(
           transaction,
         };
       });
+
+      if (activityEventData) {
+        try {
+          await createActivityEvent(
+            activityEventData
+          );
+        } catch (activityError) {
+          console.error(
+            "Tournament join activity event error:",
+            activityError
+          );
+        }
+      }
 
       return res.status(200).json(joinResponse);
     } catch (error) {
@@ -1608,6 +1648,7 @@ router.put(
 
     try {
       let responseData = null;
+      let rewardActivityEventData = null;
 
       await session.withTransaction(async () => {
         const { tournamentId, userId } = req.params;
@@ -1827,7 +1868,32 @@ router.put(
             : null;
 
         await tournament.save({ session });
-
+rewardActivityEventData = {
+  user: {
+    _id: user._id,
+    name: user.name,
+  },
+  eventType: "tournament_reward",
+  amount: totalReward,
+  eventKey:
+    `tournament_reward:${tournament._id}:${user._id}`,
+  tournamentId: tournament._id,
+  tournamentTitle: tournament.title,
+  transactionId:
+    winnerTransaction?._id ||
+    killTransaction?._id ||
+    null,
+  metadata: {
+    rank: result.rank,
+    kills: result.kills,
+    killRewardAmount,
+    winnerRewardAmount,
+    killRewardTransactionId:
+      killTransaction?._id || null,
+    winnerRewardTransactionId:
+      winnerTransaction?._id || null,
+  },
+};
         responseData = {
           success: true,
           message:
@@ -1867,7 +1933,18 @@ router.put(
           },
         };
       });
-
+if (rewardActivityEventData) {
+  try {
+    await createActivityEvent(
+      rewardActivityEventData
+    );
+  } catch (activityError) {
+    console.error(
+      "Tournament reward activity event error:",
+      activityError
+    );
+  }
+}
       return res.status(200).json(responseData);
     } catch (error) {
       console.error(

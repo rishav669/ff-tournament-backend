@@ -1,35 +1,50 @@
 const jwt = require("jsonwebtoken");
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = (
+  req,
+  res,
+  next
+) => {
   try {
-    const authHeader = req.headers.authorization;
+    const authHeader =
+      req.headers.authorization;
 
-    console.log("Authorization Header:", authHeader);
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (
+      typeof authHeader !== "string" ||
+      !authHeader.startsWith("Bearer ")
+    ) {
       return res.status(401).json({
         success: false,
-        message: "Access denied. Bearer token required",
+        message:
+          "Access denied. Bearer token required",
       });
     }
 
-    const token = authHeader.split(" ")[1];
+    const token = authHeader
+      .slice(7)
+      .trim();
 
-    console.log("Received Token:", token);
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Access denied. Bearer token required",
+      });
+    }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    console.log("Decoded Token:", decoded);
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
 
     req.user = decoded;
 
     next();
   } catch (error) {
-    console.log("JWT Error:", error.message);
-
     return res.status(401).json({
       success: false,
-      message: "Invalid or expired token",
+      message:
+        "Invalid or expired token",
     });
   }
 };
