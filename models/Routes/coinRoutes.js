@@ -1,13 +1,17 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const router = express.Router();
 
 const User = require("../user");
 const Settings = require("../settings");
 const CoinTransaction = require("../coinTransaction");
 
-const authMiddleware = require("../../middleware/authMiddleware");
-const adminMiddleware = require("../../middleware/adminMiddleware");
-
+const authMiddleware = require(
+  "../../middleware/authMiddleware"
+);
+const adminMiddleware = require(
+  "../../middleware/adminMiddleware"
+);
 // ========================================
 // IST DAY START + END
 // ========================================

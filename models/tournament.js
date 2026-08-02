@@ -23,6 +23,36 @@ const joinedPlayerSchema = new mongoose.Schema(
       trim: true,
     },
 
+    paymentMethod: {
+      type: String,
+      enum: ["wallet", "coin", "free"],
+      default: "wallet",
+    },
+
+    walletAmountPaid: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    coinAmountPaid: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    walletTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+      default: null,
+    },
+
+    coinTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CoinTransaction",
+      default: null,
+    },
+
     rulesAccepted: {
       type: Boolean,
       default: false,
@@ -199,7 +229,14 @@ const tournamentSchema = new mongoose.Schema(
       trim: true,
     },
 
-    entryFee: {
+        entryFee: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0,
+    },
+
+    coinEntryFee: {
       type: Number,
       required: true,
       min: 0,

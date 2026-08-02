@@ -551,8 +551,17 @@ router.post(
   authMiddleware,
   adminMiddleware,
   async (req, res) => {
+    const session =
+      await mongoose.startSession();
+
+    let responseData = null;
+
     try {
-      const { userId, amount, description } = req.body;
+      const {
+        userId,
+        amount,
+        description,
+      } = req.body || {};
 
       if (!userId) {
         return res.status(400).json({
@@ -568,73 +577,157 @@ router.post(
         });
       }
 
-      const creditAmount = getValidAmount(amount);
+      const creditAmount =
+        getValidAmount(amount);
 
       if (!creditAmount) {
         return res.status(400).json({
           success: false,
-          message: "Amount must be greater than zero",
+          message:
+            "Amount must be greater than zero",
         });
       }
 
-      const user = await User.findById(userId);
+      await session.withTransaction(
+        async () => {
+          const user =
+            await User.findById(
+              userId
+            ).session(session);
 
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
+          if (!user) {
+            const error =
+              new Error("User not found");
 
-      if (user.isBlocked) {
-        return res.status(403).json({
-          success: false,
-          message: "Blocked user wallet cannot be credited",
-        });
-      }
+            error.statusCode = 404;
+            throw error;
+          }
 
-      const balanceBefore = Number(user.walletBalance || 0);
-      const balanceAfter = balanceBefore + creditAmount;
+          if (user.isBlocked) {
+            const error =
+              new Error(
+                "Blocked user wallet cannot be credited"
+              );
 
-      user.walletBalance = balanceAfter;
+            error.statusCode = 403;
+            throw error;
+          }
 
-      await user.save();
+          const balanceBefore =
+            Math.round(
+              Number(
+                user.walletBalance || 0
+              ) * 100
+            ) / 100;
 
-      const transaction = await Transaction.create({
-        transactionType: "admin_credit",
-        amount: creditAmount,
-        balanceBefore,
-        balanceAfter,
-        status: "success",
-        description:
-          description && String(description).trim()
-            ? String(description).trim()
-            : "Money added by admin",
-        processedBy: req.user.userId,
-      });
+          const balanceAfter =
+            Math.round(
+              (balanceBefore +
+                creditAmount) *
+                100
+            ) / 100;
 
-      return res.status(200).json({
-        success: true,
-        message: "Money added to wallet successfully",
+          user.walletBalance =
+            balanceAfter;
 
-        wallet: {
-          userId: user._id,
-          name: user.name,
-          previousBalance: balanceBefore,
-          creditedAmount: creditAmount,
-          currentBalance: balanceAfter,
-        },
+          await user.save({
+            session,
+          });
 
-        transaction,
-      });
+          const [transaction] =
+            await Transaction.create(
+              [
+                {
+                  userId: user._id,
+
+                  transactionType:
+                    "admin_credit",
+
+                  amount:
+                    creditAmount,
+
+                  balanceBefore,
+
+                  balanceAfter,
+
+                  status:
+                    "success",
+
+                  description:
+                    description &&
+                    String(
+                      description
+                    ).trim()
+                      ? String(
+                          description
+                        ).trim()
+                      : "Money added by admin",
+
+                  processedBy:
+                    req.user.userId,
+                },
+              ],
+              {
+                session,
+              }
+            );
+
+          responseData = {
+            success: true,
+
+            message:
+              "Money added to wallet successfully",
+
+            wallet: {
+              userId:
+                user._id,
+
+              name:
+                user.name,
+
+              previousBalance:
+                balanceBefore,
+
+              creditedAmount:
+                creditAmount,
+
+              currentBalance:
+                balanceAfter,
+            },
+
+            transaction,
+          };
+        }
+      );
+
+      return res
+        .status(200)
+        .json(responseData);
     } catch (error) {
-      console.error("Admin credit error:", error);
+      console.error(
+        "Admin credit error:",
+        error
+      );
+
+      if (error.statusCode) {
+        return res
+          .status(error.statusCode)
+          .json({
+            success: false,
+            message:
+              error.message,
+          });
+      }
 
       return res.status(500).json({
         success: false,
-        message: "Failed to add money to wallet",
-        error: error.message,
+        message:
+          "Failed to add money to wallet",
+        error:
+          error.message,
       });
+    } finally {
+      await session.endSession();
     }
   }
 );

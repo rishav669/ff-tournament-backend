@@ -15,6 +15,7 @@ const coinTransactionSchema = new mongoose.Schema(
         "rewarded_ad",
         "referral_reward",
         "coupon_redeem",
+        "tournament_entry",
         "admin_credit",
         "admin_debit",
       ],
@@ -68,7 +69,23 @@ const coinTransactionSchema = new mongoose.Schema(
   }
 );
 
-coinTransactionSchema.index({ user: 1, createdAt: -1 });
+coinTransactionSchema.index({
+  user: 1,
+  createdAt: -1,
+});
+
+coinTransactionSchema.index(
+  {
+    user: 1,
+    referenceId: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      type: "coupon_redeem",
+    },
+  }
+);
 
 module.exports = mongoose.model(
   "CoinTransaction",

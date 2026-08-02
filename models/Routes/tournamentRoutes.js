@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const Tournament = require("../tournament");
 const User = require("../user");
 const Transaction = require("../transaction");
+const CoinTransaction = require("../coinTransaction");
 const Settings = require("../settings");
 const {
   processReferralReward,
@@ -112,17 +113,18 @@ router.post(
   adminMiddleware,
   async (req, res) => {
     try {
-      const {
-        title,
-        game,
-        mode,
-        map,
-        entryFee,
-        prizePool,
-        totalSlots,
-        date,
-        time,
-      } = req.body || {};
+     const {
+  title,
+  game,
+  mode,
+  map,
+  entryFee,
+  coinEntryFee,
+  prizePool,
+  totalSlots,
+  date,
+  time,
+} = req.body || {};
 
       if (
         !title ||
@@ -140,25 +142,28 @@ router.post(
       }
 
       const parsedEntryFee = Number(entryFee);
+      const parsedCoinEntryFee = Number(coinEntryFee || 0);
       const parsedPrizePool = Number(prizePool);
       const parsedTotalSlots = Number(totalSlots);
 
-      if (
-        Number.isNaN(parsedEntryFee) ||
-        Number.isNaN(parsedPrizePool) ||
-        Number.isNaN(parsedTotalSlots)
-      ) {
-        return res.status(400).json({
-          message:
-            "Entry fee, prize pool and total slots must be numbers",
-        });
-      }
+if (
+  Number.isNaN(parsedEntryFee) ||
+  Number.isNaN(parsedCoinEntryFee) ||
+  Number.isNaN(parsedPrizePool) ||
+  Number.isNaN(parsedTotalSlots)
+) {
+  return res.status(400).json({
+    message:
+      "Entry fee, prize pool and total slots must be numbers",
+  });
+}
 
       if (
-        parsedEntryFee < 0 ||
-        parsedPrizePool < 0 ||
-        parsedTotalSlots < 1
-      ) {
+  parsedEntryFee < 0 ||
+  parsedCoinEntryFee < 0 ||
+  parsedPrizePool < 0 ||
+  parsedTotalSlots < 1
+) {
         return res.status(400).json({
           message:
             "Entry fee and prize pool cannot be negative, and total slots must be at least 1",
@@ -176,9 +181,12 @@ router.post(
         map: String(map).trim(),
 
         entryFee:
-          Math.round(parsedEntryFee * 100) / 100,
+  Math.round(parsedEntryFee * 100) / 100,
 
-        prizePool:
+coinEntryFee:
+  Math.floor(parsedCoinEntryFee),
+
+prizePool:
           Math.round(parsedPrizePool * 100) / 100,
 
         totalSlots: Math.floor(parsedTotalSlots),
@@ -318,11 +326,28 @@ router.post(
           settings = createdSettings[0];
         }
 
-        const {
-          acceptRules,
-          rulesLanguage,
-        } = req.body || {};
+ const {
+  acceptRules,
+  rulesLanguage,
+  paymentMethod = "wallet",
+} = req.body || {};
 
+const selectedPaymentMethod = String(
+  paymentMethod || "wallet"
+)
+  .trim()
+  .toLowerCase();
+
+if (
+  !["wallet", "coin"].includes(
+    selectedPaymentMethod
+  )
+) {
+  throw createRouteError(
+    400,
+    "paymentMethod must be wallet or coin"
+  );
+}
         const selectedRulesLanguage =
           rulesLanguage === undefined ||
           rulesLanguage === null ||
@@ -412,99 +437,260 @@ router.post(
           );
         }
 
-        const entryFee =
-          Math.round(
-            Number(tournament.entryFee || 0) *
-              100
-          ) / 100;
+       const entryFee =
+  Math.round(
+    Number(tournament.entryFee || 0) *
+      100
+  ) / 100;
 
-        const balanceBefore =
-          Math.round(
-            Number(user.walletBalance || 0) *
-              100
-          ) / 100;
+const balanceBefore =
+  Math.round(
+    Number(user.walletBalance || 0) *
+      100
+  ) / 100;
 
-        if (balanceBefore < entryFee) {
-          throw createRouteError(
-            400,
-            "Insufficient wallet balance",
-            {
-              walletBalance: balanceBefore,
-              entryFee,
-              requiredAmount:
-                Math.round(
-                  (entryFee - balanceBefore) *
-                    100
-                ) / 100,
-            }
-          );
-        }
+let balanceAfter = balanceBefore;
 
-        const balanceAfter =
-          Math.round(
-            (balanceBefore - entryFee) * 100
-          ) / 100;
+const coinBalanceBefore =
+  Math.floor(
+    Number(user.coinBalance || 0)
+  );
 
-        let transaction = null;
+let coinBalanceAfter =
+  coinBalanceBefore;
 
-        if (entryFee > 0) {
-          user.walletBalance = balanceAfter;
+let coinEntryCost = 0;
 
-          user.totalEntryFeesPaid =
+const appliedPaymentMethod =
+  entryFee === 0
+    ? "free"
+    : selectedPaymentMethod;
+
+let transaction = null;
+let coinTransaction = null;
+let walletAmountPaid = 0;
+let coinAmountPaid = 0;
+
+if (entryFee > 0) {
+  if (
+    appliedPaymentMethod === "wallet"
+  ) {
+    if (balanceBefore < entryFee) {
+      throw createRouteError(
+        400,
+        "Insufficient wallet balance",
+        {
+          walletBalance:
+            balanceBefore,
+          entryFee,
+          requiredAmount:
             Math.round(
-              (Number(
-                user.totalEntryFeesPaid || 0
-              ) +
-                entryFee) *
+              (entryFee -
+                balanceBefore) *
                 100
-            ) / 100;
-
-          await user.save({ session });
-
-          const createdTransactions =
-            await Transaction.create(
-              [
-                {
-                  userId: user._id,
-
-                  tournamentId:
-                    tournament._id,
-
-                  transactionType:
-                    "entry_fee",
-
-                  amount: entryFee,
-
-                  balanceBefore,
-
-                  balanceAfter,
-
-                  status: "success",
-
-                  description: `Entry fee paid for ${tournament.title}`,
-                },
-              ],
-              {
-                session,
-              }
-            );
-
-          transaction =
-            createdTransactions[0];
+            ) / 100,
         }
+      );
+    }
 
-        tournament.joinedPlayers.push({
-          userId: user._id,
-          freeFireUid: user.freeFireUid,
-          freeFireIgn: user.freeFireIgn,
-          rulesAccepted,
-          rulesVersionAccepted,
-          rulesLanguageAccepted:
-            selectedRulesLanguage,
-          rulesAcceptedAt,
-          joinedAt: new Date(),
-        });
+    balanceAfter =
+      Math.round(
+        (balanceBefore - entryFee) *
+          100
+      ) / 100;
 
+    user.walletBalance =
+      balanceAfter;
+
+    walletAmountPaid = entryFee;
+  } else {
+  if (
+    settings.coinTournamentPaymentEnabled !== true
+  ) {
+    throw createRouteError(
+      403,
+      "Coin tournament entry is currently upcoming",
+      {
+        coinPaymentEnabled: false,
+        coinPaymentStatus: "upcoming",
+        walletPaymentAvailable: true,
+      }
+    );
+  }
+
+  coinEntryCost = Math.floor(
+    Number(tournament.coinEntryFee || 0)
+  );
+
+    if (
+      !Number.isFinite(
+        coinEntryCost
+      ) ||
+      !Number.isInteger(
+        coinEntryCost
+      ) ||
+      coinEntryCost <= 0
+    ) {
+      throw createRouteError(
+        500,
+        "Invalid tournament coin cost setting"
+      );
+    }
+
+    if (
+      coinBalanceBefore <
+      coinEntryCost
+    ) {
+      throw createRouteError(
+        400,
+        "Insufficient coin balance",
+        {
+          coinBalance:
+            coinBalanceBefore,
+          requiredCoins:
+            coinEntryCost,
+          missingCoins:
+            coinEntryCost -
+            coinBalanceBefore,
+          coinPaymentStatus:
+            "insufficient",
+          walletPaymentAvailable:
+            true,
+        }
+      );
+    }
+
+    coinBalanceAfter =
+      coinBalanceBefore -
+      coinEntryCost;
+
+    user.coinBalance =
+      coinBalanceAfter;
+
+    coinAmountPaid =
+      coinEntryCost;
+  }
+
+  user.totalEntryFeesPaid =
+    Math.round(
+      (Number(
+        user.totalEntryFeesPaid || 0
+      ) +
+        entryFee) *
+        100
+    ) / 100;
+
+  await user.save({
+    session,
+  });
+
+  if (
+    appliedPaymentMethod === "wallet"
+  ) {
+    const createdTransactions =
+      await Transaction.create(
+        [
+          {
+            userId: user._id,
+            tournamentId:
+              tournament._id,
+            transactionType:
+              "entry_fee",
+            amount: entryFee,
+            balanceBefore,
+            balanceAfter,
+            status: "success",
+            description:
+              `Entry fee paid for ${tournament.title}`,
+          },
+        ],
+        {
+          session,
+        }
+      );
+
+    transaction =
+      createdTransactions[0];
+  } else {
+   const createdCoinTransactions =
+  await CoinTransaction.create(
+    [
+      {
+        user: user._id,
+
+        type: "tournament_entry",
+
+        transactionType:
+          "debit",
+
+        amount:
+          coinEntryCost,
+
+        balanceBefore:
+          coinBalanceBefore,
+
+        balanceAfter:
+          coinBalanceAfter,
+
+        description:
+          `Tournament entry paid with coins: ${tournament.title}`,
+
+        referenceId:
+          `tournament-join:${tournament._id}`,
+
+        metadata: {
+          tournamentId:
+            tournament._id,
+
+          tournamentTitle:
+            tournament.title,
+
+          paymentMethod: "coin",
+          paymentLabel: "Coin Paid",
+
+          walletEntryFee:
+            entryFee,
+
+          coinEntryFee:
+            coinEntryCost,
+
+          amountPaid:
+            coinEntryCost,
+
+          paymentUnit: "coin",
+        },
+      },
+    ],
+    {
+      session,
+    }
+  );
+
+coinTransaction =
+  createdCoinTransactions[0];
+    coinTransaction =
+      createdCoinTransactions[0];
+  }
+}
+
+tournament.joinedPlayers.push({
+  userId: user._id,
+  freeFireUid: user.freeFireUid,
+  freeFireIgn: user.freeFireIgn,
+  paymentMethod: appliedPaymentMethod,
+  walletAmountPaid,
+  coinAmountPaid,
+  walletTransactionId:
+    transaction?._id || null,
+  coinTransactionId:
+    coinTransaction?._id || null,
+  rulesAccepted,
+  rulesVersionAccepted,
+  rulesLanguageAccepted:
+    selectedRulesLanguage,
+  rulesAcceptedAt,
+  joinedAt: new Date(),
+});
         tournament.joinedSlots =
           tournament.joinedPlayers.length;
 
@@ -534,50 +720,137 @@ router.post(
         };
 
         joinResponse = {
-          message:
-            "Tournament joined successfully",
+  message:
+    "Tournament joined successfully",
 
-          tournament: {
-            id: tournament._id,
-            title: tournament.title,
-            status: tournament.status,
-            entryFee,
-            joinedSlots:
-              tournament.joinedSlots,
-            totalSlots:
-              tournament.totalSlots,
-          },
+  tournament: {
+    id: tournament._id,
+    title: tournament.title,
+    status: tournament.status,
 
-          player: {
-            userId: user._id,
-            freeFireUid: user.freeFireUid,
-            freeFireIgn: user.freeFireIgn,
+    walletEntryFee:
+      entryFee,
 
-            rulesAcceptance: {
-              required:
-                settings.rulesAcceptanceRequired ===
-                true,
-              accepted: rulesAccepted,
-              version:
-                rulesVersionAccepted,
-              language:
-                selectedRulesLanguage,
-              acceptedAt:
-                rulesAcceptedAt,
-            },
-          },
+    coinEntryFee:
+      Math.floor(
+        Number(
+          tournament.coinEntryFee || 0
+        )
+      ),
 
-          wallet: {
-            previousBalance: balanceBefore,
-            entryFeePaid: entryFee,
-            currentBalance:
-              entryFee > 0
-                ? balanceAfter
-                : balanceBefore,
-          },
+    joinedSlots:
+      tournament.joinedSlots,
 
-          transaction,
-        };
+    totalSlots:
+      tournament.totalSlots,
+  },
+
+  player: {
+    userId: user._id,
+    freeFireUid:
+      user.freeFireUid,
+
+    freeFireIgn:
+      user.freeFireIgn,
+
+    paymentMethod:
+      appliedPaymentMethod,
+
+    paymentLabel:
+      appliedPaymentMethod === "coin"
+        ? "Coin Paid"
+        : appliedPaymentMethod === "wallet"
+          ? "Wallet Paid"
+          : "Free Entry",
+
+    walletAmountPaid,
+    coinAmountPaid,
+
+    rulesAcceptance: {
+      required:
+        settings.rulesAcceptanceRequired ===
+        true,
+
+      accepted:
+        rulesAccepted,
+
+      version:
+        rulesVersionAccepted,
+
+      language:
+        selectedRulesLanguage,
+
+      acceptedAt:
+        rulesAcceptedAt,
+    },
+  },
+
+  payment: {
+    paymentMethod:
+      appliedPaymentMethod,
+
+    paymentLabel:
+      appliedPaymentMethod === "coin"
+        ? "Coin Paid"
+        : appliedPaymentMethod === "wallet"
+          ? "Wallet Paid"
+          : "Free Entry",
+
+    amountPaid:
+      appliedPaymentMethod === "coin"
+        ? coinAmountPaid
+        : appliedPaymentMethod === "wallet"
+          ? walletAmountPaid
+          : 0,
+
+    paymentUnit:
+      appliedPaymentMethod === "coin"
+        ? "coin"
+        : appliedPaymentMethod === "wallet"
+          ? "rupee"
+          : "free",
+
+    walletEntryFee:
+      entryFee,
+
+    coinEntryFee:
+      Math.floor(
+        Number(
+          tournament.coinEntryFee || 0
+        )
+      ),
+  },
+
+  wallet: {
+    previousBalance:
+      balanceBefore,
+
+    amountDebited:
+      walletAmountPaid,
+
+    currentBalance:
+      balanceAfter,
+  },
+
+  coin: {
+    previousBalance:
+      coinBalanceBefore,
+
+    amountDebited:
+      coinAmountPaid,
+
+    currentBalance:
+      coinBalanceAfter,
+  },
+
+  transactions: {
+    walletTransaction:
+      transaction,
+
+    coinTransaction:
+      coinTransaction,
+  },
+};
       });
 
       if (activityEventData) {
@@ -655,6 +928,7 @@ router.put(
         "mode",
         "map",
         "entryFee",
+        "coinEntryFee",
         "prizePool",
         "totalSlots",
         "date",
@@ -672,9 +946,10 @@ router.put(
       });
 
       if (
-        Number(tournament.entryFee) < 0 ||
-        Number(tournament.prizePool) < 0
-      ) {
+  Number(tournament.entryFee) < 0 ||
+  Number(tournament.coinEntryFee) < 0 ||
+  Number(tournament.prizePool) < 0
+) {
         return res.status(400).json({
           message:
             "Entry fee and prize pool cannot be negative",
@@ -868,6 +1143,7 @@ router.get(
 
 // =====================================
 // ADMIN VIEW JOINED PLAYERS
+// PAYMENT METHOD + COLLECTION SUMMARY
 // =====================================
 router.get(
   "/players/:id",
@@ -878,30 +1154,220 @@ router.get(
       const tournament =
         await Tournament.findById(
           req.params.id
+        ).populate(
+          "joinedPlayers.userId",
+          "name email"
         );
 
       if (!tournament) {
         return res.status(404).json({
-          message: "Tournament not found",
+          message:
+            "Tournament not found",
         });
       }
 
+      const players =
+        tournament.joinedPlayers.map(
+          (player) => {
+            const paymentMethod =
+              String(
+                player.paymentMethod ||
+                  "free"
+              )
+                .trim()
+                .toLowerCase();
+
+            const walletAmountPaid =
+              Math.round(
+                Number(
+                  player.walletAmountPaid ||
+                    0
+                ) * 100
+              ) / 100;
+
+            const coinAmountPaid =
+              Math.floor(
+                Number(
+                  player.coinAmountPaid ||
+                    0
+                )
+              );
+
+            const amountPaid =
+              paymentMethod === "coin"
+                ? coinAmountPaid
+                : paymentMethod ===
+                    "wallet"
+                  ? walletAmountPaid
+                  : 0;
+
+            const paymentLabel =
+              paymentMethod === "coin"
+                ? "Coin Paid"
+                : paymentMethod ===
+                    "wallet"
+                  ? "Wallet Paid"
+                  : "Free Entry";
+
+            const paymentUnit =
+              paymentMethod === "coin"
+                ? "coin"
+                : paymentMethod ===
+                    "wallet"
+                  ? "rupee"
+                  : "free";
+
+            const userData =
+              player.userId &&
+              typeof player.userId ===
+                "object"
+                ? player.userId
+                : null;
+
+            return {
+              joinRecordId:
+                player._id,
+
+              userId:
+                userData?._id ||
+                player.userId,
+
+              name:
+                userData?.name || "",
+
+              email:
+                userData?.email || "",
+
+              freeFireUid:
+                player.freeFireUid,
+
+              freeFireIgn:
+                player.freeFireIgn,
+
+              paymentMethod,
+              paymentLabel,
+              amountPaid,
+              paymentUnit,
+
+              walletAmountPaid,
+              coinAmountPaid,
+
+              walletTransactionId:
+                player.walletTransactionId ||
+                null,
+
+              coinTransactionId:
+                player.coinTransactionId ||
+                null,
+
+              rulesAcceptance: {
+                accepted:
+                  player.rulesAccepted ===
+                  true,
+
+                version:
+                  Number(
+                    player.rulesVersionAccepted ||
+                      0
+                  ),
+
+                language:
+                  player.rulesLanguageAccepted ||
+                  "",
+
+                acceptedAt:
+                  player.rulesAcceptedAt ||
+                  null,
+              },
+
+              joinedAt:
+                player.joinedAt,
+            };
+          }
+        );
+
+      const paymentSummary = {
+        totalJoined:
+          players.length,
+
+        walletJoined:
+          players.filter(
+            (player) =>
+              player.paymentMethod ===
+              "wallet"
+          ).length,
+
+        coinJoined:
+          players.filter(
+            (player) =>
+              player.paymentMethod ===
+              "coin"
+          ).length,
+
+        freeJoined:
+          players.filter(
+            (player) =>
+              player.paymentMethod ===
+              "free"
+          ).length,
+
+        totalWalletCollected:
+          Math.round(
+            players.reduce(
+              (total, player) =>
+                total +
+                Number(
+                  player.walletAmountPaid ||
+                    0
+                ),
+              0
+            ) * 100
+          ) / 100,
+
+        totalCoinCollected:
+          players.reduce(
+            (total, player) =>
+              total +
+              Number(
+                player.coinAmountPaid ||
+                  0
+              ),
+            0
+          ),
+      };
+
       return res.status(200).json({
+        success: true,
+
         message:
           "Joined players fetched successfully",
 
         tournament: {
-          id: tournament._id,
-          title: tournament.title,
-          status: tournament.status,
+          id:
+            tournament._id,
+
+          title:
+            tournament.title,
+
+          status:
+            tournament.status,
+
+          walletEntryFee:
+            tournament.entryFee,
+
+          coinEntryFee:
+            tournament.coinEntryFee,
+
           joinedSlots:
             tournament.joinedSlots,
+
           totalSlots:
             tournament.totalSlots,
         },
 
-        players:
-          tournament.joinedPlayers,
+        paymentSummary,
+
+        players,
       });
     } catch (error) {
       console.error(
@@ -910,14 +1376,17 @@ router.get(
       );
 
       return res.status(500).json({
+        success: false,
+
         message:
           "Server error while fetching joined players",
-        error: error.message,
+
+        error:
+          error.message,
       });
     }
   }
 );
-
 // =====================================
 // COMPLETE TOURNAMENT — ADMIN ONLY
 // LIVE → COMPLETED

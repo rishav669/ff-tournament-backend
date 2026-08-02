@@ -319,6 +319,13 @@ const settingsSchema = new mongoose.Schema(
       default: 10,
       min: 0,
     },
+        // ==========================
+    // TOURNAMENT COIN PAYMENT
+    // ==========================
+    coinTournamentPaymentEnabled: {
+      type: Boolean,
+      default: false,
+    },
 
     // ==========================
     // COUPON / REDEEM

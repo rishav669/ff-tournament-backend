@@ -17,6 +17,7 @@ const BOOLEAN_FIELDS = [
   "withdrawalEnabled",
   "joinTournamentEnabled",
   "rewardedAdsEnabled",
+  "coinTournamentPaymentEnabled",
   "couponRedeemEnabled",
   "referralEnabled",
   "rulesAcceptanceRequired",

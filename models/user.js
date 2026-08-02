@@ -55,6 +55,20 @@ const userSchema = new mongoose.Schema(
       default: 0,
       min: [0, "Coin balance cannot be negative"],
     },
+    // Free Match Coupon Balance
+    freeMatchCoupons: {
+      type: Number,
+      default: 0,
+      min: [
+        0,
+        "Free match coupon balance cannot be negative",
+      ],
+      validate: {
+        validator: Number.isInteger,
+        message:
+          "Free match coupon balance must be an integer",
+      },
+    },
 
     // =============================
     // Referral System
