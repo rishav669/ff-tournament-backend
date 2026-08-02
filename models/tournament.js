@@ -274,11 +274,51 @@ const tournamentSchema = new mongoose.Schema(
       trim: true,
     },
 
-    status: {
-      type: String,
-      enum: ["Upcoming", "Live", "Completed"],
-      default: "Upcoming",
-    },
+   status: {
+  type: String,
+  enum: [
+    "Upcoming",
+    "Live",
+    "Completed",
+    "Cancelled",
+    "Expired",
+  ],
+  default: "Upcoming",
+},
+
+cancelReason: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
+cancelledAt: {
+  type: Date,
+  default: null,
+},
+
+cancelledBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+  default: null,
+},
+
+expireReason: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
+expiredAt: {
+  type: Date,
+  default: null,
+},
+
+expiredBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+  default: null,
+},
 
     roomId: {
       type: String,

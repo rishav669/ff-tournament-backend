@@ -12,13 +12,14 @@ const coinTransactionSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: [
-        "rewarded_ad",
-        "referral_reward",
-        "coupon_redeem",
-        "tournament_entry",
-        "admin_credit",
-        "admin_debit",
-      ],
+  "rewarded_ad",
+  "referral_reward",
+  "coupon_redeem",
+  "tournament_entry",
+  "tournament_refund",
+  "admin_credit",
+  "admin_debit",
+],
       required: true,
     },
 

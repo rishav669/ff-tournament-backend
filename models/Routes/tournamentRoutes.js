@@ -1399,6 +1399,493 @@ router.get(
   }
 );
 // =====================================
+// CANCEL TOURNAMENT — ADMIN ONLY
+// WALLET + COIN ENTRY AUTOMATIC REFUND
+// =====================================
+router.put(
+  "/cancel/:id",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const session =
+      await mongoose.startSession();
+
+    let responseData = null;
+
+    try {
+      const cancelReason =
+        req.body?.cancelReason
+          ? String(
+              req.body.cancelReason
+            ).trim()
+          : "";
+
+      if (!cancelReason) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Tournament cancellation reason is required",
+        });
+      }
+
+      if (cancelReason.length > 500) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Cancellation reason cannot exceed 500 characters",
+        });
+      }
+
+      await session.withTransaction(
+        async () => {
+          const tournament =
+            await Tournament.findById(
+              req.params.id
+            ).session(session);
+
+          if (!tournament) {
+            throw createRouteError(
+              404,
+              "Tournament not found"
+            );
+          }
+
+          if (
+            tournament.status ===
+            "Cancelled"
+          ) {
+            throw createRouteError(
+              400,
+              "Tournament is already cancelled"
+            );
+          }
+
+          if (
+            tournament.status ===
+            "Completed"
+          ) {
+            throw createRouteError(
+              400,
+              "Completed tournament cannot be cancelled"
+            );
+          }
+
+          if (
+            tournament.status ===
+            "Expired"
+          ) {
+            throw createRouteError(
+              400,
+              "Expired tournament cannot be cancelled"
+            );
+          }
+
+          if (
+            ![
+              "Upcoming",
+              "Live",
+            ].includes(
+              tournament.status
+            )
+          ) {
+            throw createRouteError(
+              400,
+              "This tournament cannot be cancelled"
+            );
+          }
+
+          let walletRefundedPlayers = 0;
+          let coinRefundedPlayers = 0;
+          let freePlayers = 0;
+
+          let totalWalletRefunded = 0;
+          let totalCoinRefunded = 0;
+
+          const refundedPlayers = [];
+
+          for (
+            const player of
+            tournament.joinedPlayers
+          ) {
+            const user =
+              await User.findById(
+                player.userId
+              ).session(session);
+
+            if (!user) {
+              throw createRouteError(
+                404,
+                `Joined user not found: ${player.userId}`
+              );
+            }
+
+            const walletAmountPaid =
+              Math.round(
+                Number(
+                  player.walletAmountPaid ||
+                    0
+                ) * 100
+              ) / 100;
+
+            const coinAmountPaid =
+              Math.floor(
+                Number(
+                  player.coinAmountPaid ||
+                    0
+                )
+              );
+
+            const savedPaymentMethod =
+              String(
+                player.paymentMethod ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
+
+            const paymentMethod =
+              [
+                "wallet",
+                "coin",
+                "free",
+              ].includes(
+                savedPaymentMethod
+              )
+                ? savedPaymentMethod
+                : coinAmountPaid > 0
+                  ? "coin"
+                  : walletAmountPaid > 0
+                    ? "wallet"
+                    : "free";
+
+            let refundTransactionId =
+              null;
+
+            if (
+              paymentMethod ===
+                "wallet" &&
+              walletAmountPaid > 0
+            ) {
+              const balanceBefore =
+                Math.round(
+                  Number(
+                    user.walletBalance ||
+                      0
+                  ) * 100
+                ) / 100;
+
+              const balanceAfter =
+                Math.round(
+                  (balanceBefore +
+                    walletAmountPaid) *
+                    100
+                ) / 100;
+
+              user.walletBalance =
+                balanceAfter;
+
+              await user.save({
+                session,
+              });
+
+              const [refundTransaction] =
+                await Transaction.create(
+                  [
+                    {
+                      userId:
+                        user._id,
+
+                      tournamentId:
+                        tournament._id,
+
+                      transactionType:
+                        "refund",
+
+                      amount:
+                        walletAmountPaid,
+
+                      balanceBefore,
+
+                      balanceAfter,
+
+                      status:
+                        "success",
+
+                      description:
+                        `Tournament cancellation refund: ${tournament.title}`,
+
+                      processedBy:
+                        req.user.userId,
+                    },
+                  ],
+                  {
+                    session,
+                  }
+                );
+
+              refundTransactionId =
+                refundTransaction._id;
+
+              walletRefundedPlayers +=
+                1;
+
+              totalWalletRefunded =
+                Math.round(
+                  (totalWalletRefunded +
+                    walletAmountPaid) *
+                    100
+                ) / 100;
+            } else if (
+              paymentMethod ===
+                "coin" &&
+              coinAmountPaid > 0
+            ) {
+              const coinBalanceBefore =
+                Math.floor(
+                  Number(
+                    user.coinBalance ||
+                      0
+                  )
+                );
+
+              const coinBalanceAfter =
+                coinBalanceBefore +
+                coinAmountPaid;
+
+              user.coinBalance =
+                coinBalanceAfter;
+
+              await user.save({
+                session,
+              });
+
+              const [
+                refundCoinTransaction,
+              ] =
+                await CoinTransaction.create(
+                  [
+                    {
+                      user:
+                        user._id,
+
+                      type:
+                        "tournament_refund",
+
+                      transactionType:
+                        "credit",
+
+                      amount:
+                        coinAmountPaid,
+
+                      balanceBefore:
+                        coinBalanceBefore,
+
+                      balanceAfter:
+                        coinBalanceAfter,
+
+                      description:
+                        `Tournament cancellation coin refund: ${tournament.title}`,
+
+                      referenceId:
+                        `tournament-refund:${tournament._id}:${user._id}`,
+
+                      metadata: {
+                        tournamentId:
+                          tournament._id,
+
+                        tournamentTitle:
+                          tournament.title,
+
+                        paymentMethod:
+                          "coin",
+
+                        refundReason:
+                          cancelReason,
+
+                        amountRefunded:
+                          coinAmountPaid,
+
+                        paymentUnit:
+                          "coin",
+                      },
+                    },
+                  ],
+                  {
+                    session,
+                  }
+                );
+
+              refundTransactionId =
+                refundCoinTransaction._id;
+
+              coinRefundedPlayers +=
+                1;
+
+              totalCoinRefunded +=
+                coinAmountPaid;
+            } else {
+              freePlayers += 1;
+            }
+
+            if (
+              paymentMethod !== "free"
+            ) {
+              const entryFeeEquivalent =
+                Math.round(
+                  Number(
+                    tournament.entryFee ||
+                      0
+                  ) * 100
+                ) / 100;
+
+              user.totalEntryFeesPaid =
+                Math.max(
+                  0,
+                  Math.round(
+                    (Number(
+                      user.totalEntryFeesPaid ||
+                        0
+                    ) -
+                      entryFeeEquivalent) *
+                      100
+                  ) / 100
+                );
+
+              await user.save({
+                session,
+              });
+            }
+
+            refundedPlayers.push({
+              userId:
+                user._id,
+
+              freeFireUid:
+                player.freeFireUid,
+
+              freeFireIgn:
+                player.freeFireIgn,
+
+              paymentMethod,
+
+              walletRefunded:
+                paymentMethod ===
+                "wallet"
+                  ? walletAmountPaid
+                  : 0,
+
+              coinRefunded:
+                paymentMethod ===
+                "coin"
+                  ? coinAmountPaid
+                  : 0,
+
+              refundTransactionId,
+            });
+          }
+
+          tournament.status =
+            "Cancelled";
+
+          tournament.cancelReason =
+            cancelReason;
+
+          tournament.cancelledAt =
+            new Date();
+
+          tournament.cancelledBy =
+            req.user.userId;
+
+          tournament.roomId = "";
+          tournament.roomPassword = "";
+
+          await tournament.save({
+            session,
+          });
+
+          responseData = {
+            success: true,
+
+            message:
+              "Tournament cancelled and entry payments refunded successfully",
+
+            tournament: {
+              id:
+                tournament._id,
+
+              title:
+                tournament.title,
+
+              status:
+                tournament.status,
+
+              cancelReason:
+                tournament.cancelReason,
+
+              cancelledAt:
+                tournament.cancelledAt,
+
+              cancelledBy:
+                tournament.cancelledBy,
+            },
+
+            refundSummary: {
+              totalJoined:
+                tournament.joinedPlayers
+                  .length,
+
+              walletRefundedPlayers,
+
+              coinRefundedPlayers,
+
+              freePlayers,
+
+              totalWalletRefunded,
+
+              totalCoinRefunded,
+            },
+
+            refundedPlayers,
+          };
+        }
+      );
+
+      return res
+        .status(200)
+        .json(responseData);
+    } catch (error) {
+      console.error(
+        "Cancel tournament error:",
+        error
+      );
+
+      if (error.statusCode) {
+        return res
+          .status(error.statusCode)
+          .json({
+            success: false,
+            message:
+              error.message,
+            ...(error.extraData ||
+              {}),
+          });
+      }
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Server error while cancelling tournament",
+
+        error:
+          error.message,
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+);
+// =====================================
 // COMPLETE TOURNAMENT — ADMIN ONLY
 // LIVE → COMPLETED
 // =====================================
