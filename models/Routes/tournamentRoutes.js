@@ -1086,15 +1086,26 @@ router.get(
         });
       }
 
-      const isAdmin =
-        req.user.role === "admin";
+const currentUser =
+  await User.findById(
+    req.user.userId
+  ).select("role");
 
-      const isJoined =
-        tournament.joinedPlayers.some(
-          (player) =>
-            player.userId.toString() ===
-            req.user.userId.toString()
-        );
+if (!currentUser) {
+  return res.status(404).json({
+    message: "User not found",
+  });
+}
+
+const isAdmin =
+  currentUser.role === "admin";
+
+const isJoined =
+  tournament.joinedPlayers.some(
+    (player) =>
+      player.userId.toString() ===
+      currentUser._id.toString()
+  );
 
       if (!isAdmin && !isJoined) {
         return res.status(403).json({
