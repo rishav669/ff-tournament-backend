@@ -220,7 +220,7 @@ prizePool:
 router.get("/", async (req, res) => {
   try {
     const tournaments = await Tournament.find()
-      .select("-roomId -roomPassword")
+      .select("-roomId -roomPassword -joinedPlayers -results")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -1020,13 +1020,15 @@ router.put(
       }
 
       if (
-        tournament.status === "Completed"
-      ) {
-        return res.status(400).json({
-          message:
-            "Completed tournament cannot be made live",
-        });
-      }
+  !["Upcoming", "Live"].includes(
+    tournament.status
+  )
+) {
+  return res.status(400).json({
+    message:
+      `${tournament.status} tournament cannot be made live`,
+  });
+}
 
       tournament.roomId =
         String(roomId).trim();
@@ -1876,6 +1878,500 @@ router.put(
 
         message:
           "Server error while cancelling tournament",
+
+        error:
+          error.message,
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+);
+// =====================================
+// EXPIRE TOURNAMENT — ADMIN ONLY
+// WALLET + COIN ENTRY AUTOMATIC REFUND
+// =====================================
+router.put(
+  "/expire/:id",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const session =
+      await mongoose.startSession();
+
+    let responseData = null;
+
+    try {
+      const expireReason =
+        req.body?.expireReason
+          ? String(
+              req.body.expireReason
+            ).trim()
+          : "";
+
+      if (!expireReason) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Tournament expiry reason is required",
+        });
+      }
+
+      if (expireReason.length > 500) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Expiry reason cannot exceed 500 characters",
+        });
+      }
+
+      await session.withTransaction(
+        async () => {
+          const tournament =
+            await Tournament.findById(
+              req.params.id
+            ).session(session);
+
+          if (!tournament) {
+            throw createRouteError(
+              404,
+              "Tournament not found"
+            );
+          }
+
+          if (
+            tournament.status ===
+            "Expired"
+          ) {
+            throw createRouteError(
+              400,
+              "Tournament is already expired"
+            );
+          }
+
+          if (
+            tournament.status ===
+            "Cancelled"
+          ) {
+            throw createRouteError(
+              400,
+              "Cancelled tournament cannot be expired"
+            );
+          }
+
+          if (
+            tournament.status ===
+            "Completed"
+          ) {
+            throw createRouteError(
+              400,
+              "Completed tournament cannot be expired"
+            );
+          }
+
+          if (
+            tournament.status !==
+            "Upcoming"
+          ) {
+            throw createRouteError(
+              400,
+              "Only an upcoming tournament can be expired"
+            );
+          }
+
+          let walletRefundedPlayers = 0;
+          let coinRefundedPlayers = 0;
+          let freePlayers = 0;
+
+          let totalWalletRefunded = 0;
+          let totalCoinRefunded = 0;
+
+          const refundedPlayers = [];
+
+          for (
+            const player of
+            tournament.joinedPlayers || []
+          ) {
+            const user =
+              await User.findById(
+                player.userId
+              ).session(session);
+
+            if (!user) {
+              throw createRouteError(
+                404,
+                `Joined user not found: ${player.userId}`
+              );
+            }
+
+            const walletAmountPaid =
+              Math.round(
+                Number(
+                  player.walletAmountPaid ||
+                    0
+                ) * 100
+              ) / 100;
+
+            const coinAmountPaid =
+              Math.floor(
+                Number(
+                  player.coinAmountPaid ||
+                    0
+                )
+              );
+
+            const savedPaymentMethod =
+              String(
+                player.paymentMethod ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
+
+            const paymentMethod =
+              [
+                "wallet",
+                "coin",
+                "free",
+              ].includes(
+                savedPaymentMethod
+              )
+                ? savedPaymentMethod
+                : coinAmountPaid > 0
+                  ? "coin"
+                  : walletAmountPaid > 0
+                    ? "wallet"
+                    : "free";
+
+            let walletBalanceBefore =
+              Math.round(
+                Number(
+                  user.walletBalance || 0
+                ) * 100
+              ) / 100;
+
+            let walletBalanceAfter =
+              walletBalanceBefore;
+
+            let coinBalanceBefore =
+              Math.floor(
+                Number(
+                  user.coinBalance || 0
+                )
+              );
+
+            let coinBalanceAfter =
+              coinBalanceBefore;
+
+            let refundTransactionId =
+              null;
+
+            if (
+              paymentMethod ===
+                "wallet" &&
+              walletAmountPaid > 0
+            ) {
+              walletBalanceAfter =
+                Math.round(
+                  (walletBalanceBefore +
+                    walletAmountPaid) *
+                    100
+                ) / 100;
+
+              user.walletBalance =
+                walletBalanceAfter;
+
+              walletRefundedPlayers +=
+                1;
+
+              totalWalletRefunded =
+                Math.round(
+                  (totalWalletRefunded +
+                    walletAmountPaid) *
+                    100
+                ) / 100;
+            } else if (
+              paymentMethod ===
+                "coin" &&
+              coinAmountPaid > 0
+            ) {
+              coinBalanceAfter =
+                coinBalanceBefore +
+                coinAmountPaid;
+
+              user.coinBalance =
+                coinBalanceAfter;
+
+              coinRefundedPlayers +=
+                1;
+
+              totalCoinRefunded +=
+                coinAmountPaid;
+            } else {
+              freePlayers += 1;
+            }
+
+            if (
+              paymentMethod !== "free"
+            ) {
+              const entryFeeEquivalent =
+                Math.round(
+                  Number(
+                    tournament.entryFee ||
+                      0
+                  ) * 100
+                ) / 100;
+
+              user.totalEntryFeesPaid =
+                Math.max(
+                  0,
+                  Math.round(
+                    (Number(
+                      user.totalEntryFeesPaid ||
+                        0
+                    ) -
+                      entryFeeEquivalent) *
+                      100
+                  ) / 100
+                );
+            }
+
+            await user.save({
+              session,
+            });
+
+            if (
+              paymentMethod ===
+                "wallet" &&
+              walletAmountPaid > 0
+            ) {
+              const [refundTransaction] =
+                await Transaction.create(
+                  [
+                    {
+                      userId:
+                        user._id,
+
+                      tournamentId:
+                        tournament._id,
+
+                      transactionType:
+                        "refund",
+
+                      amount:
+                        walletAmountPaid,
+
+                      balanceBefore:
+                        walletBalanceBefore,
+
+                      balanceAfter:
+                        walletBalanceAfter,
+
+                      status:
+                        "success",
+
+                      description:
+                        `Tournament expiry refund: ${tournament.title}`,
+
+                      processedBy:
+                        req.user.userId,
+                    },
+                  ],
+                  {
+                    session,
+                  }
+                );
+
+              refundTransactionId =
+                refundTransaction._id;
+            } else if (
+              paymentMethod ===
+                "coin" &&
+              coinAmountPaid > 0
+            ) {
+              const [
+                refundCoinTransaction,
+              ] =
+                await CoinTransaction.create(
+                  [
+                    {
+                      user:
+                        user._id,
+
+                      type:
+                        "tournament_refund",
+
+                      transactionType:
+                        "credit",
+
+                      amount:
+                        coinAmountPaid,
+
+                      balanceBefore:
+                        coinBalanceBefore,
+
+                      balanceAfter:
+                        coinBalanceAfter,
+
+                      description:
+                        `Tournament expiry coin refund: ${tournament.title}`,
+
+                      referenceId:
+                        `tournament-expire-refund:${tournament._id}:${user._id}`,
+
+                      metadata: {
+                        tournamentId:
+                          tournament._id,
+
+                        tournamentTitle:
+                          tournament.title,
+
+                        paymentMethod:
+                          "coin",
+
+                        refundType:
+                          "tournament_expired",
+
+                        refundReason:
+                          expireReason,
+
+                        amountRefunded:
+                          coinAmountPaid,
+
+                        paymentUnit:
+                          "coin",
+                      },
+                    },
+                  ],
+                  {
+                    session,
+                  }
+                );
+
+              refundTransactionId =
+                refundCoinTransaction._id;
+            }
+
+            refundedPlayers.push({
+              userId:
+                user._id,
+
+              freeFireUid:
+                player.freeFireUid,
+
+              freeFireIgn:
+                player.freeFireIgn,
+
+              paymentMethod,
+
+              walletRefunded:
+                paymentMethod ===
+                "wallet"
+                  ? walletAmountPaid
+                  : 0,
+
+              coinRefunded:
+                paymentMethod ===
+                "coin"
+                  ? coinAmountPaid
+                  : 0,
+
+              refundTransactionId,
+            });
+          }
+
+          tournament.status =
+            "Expired";
+
+          tournament.expireReason =
+            expireReason;
+
+          tournament.expiredAt =
+            new Date();
+
+          tournament.expiredBy =
+            req.user.userId;
+
+          tournament.roomId = "";
+          tournament.roomPassword = "";
+
+          await tournament.save({
+            session,
+          });
+
+          responseData = {
+            success: true,
+
+            message:
+              "Tournament expired and entry payments refunded successfully",
+
+            tournament: {
+              id:
+                tournament._id,
+
+              title:
+                tournament.title,
+
+              status:
+                tournament.status,
+
+              expireReason:
+                tournament.expireReason,
+
+              expiredAt:
+                tournament.expiredAt,
+
+              expiredBy:
+                tournament.expiredBy,
+            },
+
+            refundSummary: {
+              totalJoined:
+                tournament.joinedPlayers
+                  .length,
+
+              walletRefundedPlayers,
+
+              coinRefundedPlayers,
+
+              freePlayers,
+
+              totalWalletRefunded,
+
+              totalCoinRefunded,
+            },
+
+            refundedPlayers,
+          };
+        }
+      );
+
+      return res
+        .status(200)
+        .json(responseData);
+    } catch (error) {
+      console.error(
+        "Expire tournament error:",
+        error
+      );
+
+      if (error.statusCode) {
+        return res
+          .status(error.statusCode)
+          .json({
+            success: false,
+            message:
+              error.message,
+            ...(error.extraData ||
+              {}),
+          });
+      }
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Server error while expiring tournament",
 
         error:
           error.message,
@@ -3221,6 +3717,247 @@ router.get(
         success: false,
         message:
           "Server error while fetching reward history",
+        error: error.message,
+      });
+    }
+  }
+);
+// =====================================
+// LOGGED-IN USER'S JOINED TOURNAMENTS
+// GET /api/tournaments/my-tournaments
+// =====================================
+router.get(
+  "/my-tournaments",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const allowedStatuses = [
+        "Upcoming",
+        "Live",
+        "Completed",
+        "Cancelled",
+        "Expired",
+      ];
+
+      const requestedStatus = req.query.status
+        ? String(req.query.status).trim()
+        : "";
+
+      const filter = {
+        "joinedPlayers.userId": req.user.userId,
+      };
+
+      if (requestedStatus) {
+        const matchedStatus = allowedStatuses.find(
+          (status) =>
+            status.toLowerCase() ===
+            requestedStatus.toLowerCase()
+        );
+
+        if (!matchedStatus) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Invalid tournament status filter",
+            allowedStatuses,
+          });
+        }
+
+        filter.status = matchedStatus;
+      }
+
+      const tournaments = await Tournament.find(
+        filter
+      )
+        .select(
+          "title game mode map entryFee coinEntryFee prizePool totalSlots joinedSlots date time status roomId roomPassword cancelReason cancelledAt expireReason expiredAt resultPublished joinedPlayers createdAt updatedAt"
+        )
+        .sort({
+          createdAt: -1,
+        })
+        .lean();
+
+      const myTournaments = tournaments
+        .map((tournament) => {
+          const joinedPlayer =
+            (
+              tournament.joinedPlayers || []
+            ).find(
+              (player) =>
+                String(player.userId) ===
+                String(req.user.userId)
+            );
+
+          if (!joinedPlayer) {
+            return null;
+          }
+
+          const walletAmountPaid =
+            Math.round(
+              Number(
+                joinedPlayer.walletAmountPaid ||
+                  0
+              ) * 100
+            ) / 100;
+
+          const coinAmountPaid =
+            Math.floor(
+              Number(
+                joinedPlayer.coinAmountPaid ||
+                  0
+              )
+            );
+
+          const savedPaymentMethod =
+            String(
+              joinedPlayer.paymentMethod || ""
+            )
+              .trim()
+              .toLowerCase();
+
+          const paymentMethod = [
+            "wallet",
+            "coin",
+            "free",
+          ].includes(savedPaymentMethod)
+            ? savedPaymentMethod
+            : coinAmountPaid > 0
+              ? "coin"
+              : walletAmountPaid > 0
+                ? "wallet"
+                : Number(
+                      tournament.entryFee || 0
+                    ) === 0
+                  ? "free"
+                  : "previous_entry";
+
+          const paymentLabel =
+            paymentMethod === "coin"
+              ? "Coin Paid"
+              : paymentMethod === "wallet"
+                ? "Wallet Paid"
+                : paymentMethod === "free"
+                  ? "Free Entry"
+                  : "Previous Entry";
+
+          const roomAvailable = Boolean(
+            tournament.roomId &&
+              tournament.roomPassword
+          );
+
+          return {
+            id: tournament._id,
+            title: tournament.title,
+            game: tournament.game,
+            mode: tournament.mode,
+            map: tournament.map,
+
+            walletEntryFee:
+              tournament.entryFee || 0,
+
+            coinEntryFee:
+              tournament.coinEntryFee || 0,
+
+            prizePool:
+              tournament.prizePool || 0,
+
+            totalSlots:
+              tournament.totalSlots,
+
+            joinedSlots:
+              tournament.joinedSlots,
+
+            date: tournament.date,
+            time: tournament.time,
+            status: tournament.status,
+
+            resultPublished:
+              tournament.resultPublished ===
+              true,
+
+            roomAvailable,
+
+            roomEndpoint: roomAvailable
+              ? `/api/tournaments/room/${tournament._id}`
+              : null,
+
+            cancelReason:
+              tournament.cancelReason || "",
+
+            cancelledAt:
+              tournament.cancelledAt || null,
+
+            expireReason:
+              tournament.expireReason || "",
+
+            expiredAt:
+              tournament.expiredAt || null,
+
+            myJoin: {
+              freeFireUid:
+                joinedPlayer.freeFireUid,
+
+              freeFireIgn:
+                joinedPlayer.freeFireIgn,
+
+              paymentMethod,
+              paymentLabel,
+              walletAmountPaid,
+              coinAmountPaid,
+
+              rulesAccepted:
+                joinedPlayer.rulesAccepted ===
+                true,
+
+              rulesVersionAccepted:
+                Number(
+                  joinedPlayer.rulesVersionAccepted ||
+                    0
+                ),
+
+              rulesLanguageAccepted:
+                joinedPlayer.rulesLanguageAccepted ||
+                "",
+
+              joinedAt:
+                joinedPlayer.joinedAt ||
+                null,
+            },
+
+            createdAt:
+              tournament.createdAt,
+
+            updatedAt:
+              tournament.updatedAt,
+          };
+        })
+        .filter(Boolean);
+
+      return res.status(200).json({
+        success: true,
+
+        message:
+          "My tournaments fetched successfully",
+
+        count: myTournaments.length,
+
+        appliedStatus:
+          requestedStatus || "all",
+
+        tournaments: myTournaments,
+      });
+    } catch (error) {
+      console.error(
+        "Get my tournaments error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Server error while fetching my tournaments",
+
         error: error.message,
       });
     }
