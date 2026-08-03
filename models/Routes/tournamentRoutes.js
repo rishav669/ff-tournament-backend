@@ -3154,7 +3154,157 @@ router.get(
     }
   }
 );
+// =====================================
+// GET SINGLE TOURNAMENT DETAILS
+// PUBLIC — ROOM DETAILS HIDDEN
+// =====================================
+router.get(
+  "/details/:id",
+  async (req, res) => {
+    try {
+      const tournament =
+        await Tournament.findById(
+          req.params.id
+        ).select(
+          "-roomId -roomPassword -joinedPlayers -results -createdBy -cancelledBy -expiredBy"
+        );
 
+      if (!tournament) {
+        return res.status(404).json({
+          message:
+            "Tournament not found",
+        });
+      }
+
+      const settings =
+        await Settings.findOne().select(
+          "joinTournamentEnabled coinTournamentPaymentEnabled coinPaymentUpcomingText"
+        );
+
+      const globalJoinEnabled =
+        settings
+          ? settings.joinTournamentEnabled !==
+            false
+          : true;
+
+      const coinPaymentEnabled =
+        settings
+          ? settings
+              .coinTournamentPaymentEnabled ===
+            true
+          : false;
+
+      const tournamentData =
+        tournament.toObject();
+
+      const availableSlots =
+        Math.max(
+          Number(
+            tournament.totalSlots || 0
+          ) -
+            Number(
+              tournament.joinedSlots || 0
+            ),
+          0
+        );
+
+      const isFull =
+        availableSlots === 0;
+
+      const isUpcoming =
+        tournament.status ===
+        "Upcoming";
+
+      const canJoin =
+        globalJoinEnabled &&
+        isUpcoming &&
+        !isFull;
+
+      let joinDisabledReason = "";
+
+      if (!globalJoinEnabled) {
+        joinDisabledReason =
+          "Tournament joining is currently disabled";
+      } else if (!isUpcoming) {
+        joinDisabledReason =
+          `Tournament status is ${tournament.status}`;
+      } else if (isFull) {
+        joinDisabledReason =
+          "Tournament is full";
+      }
+
+      return res.status(200).json({
+        message:
+          "Tournament details fetched successfully",
+
+        tournament: {
+          ...tournamentData,
+
+          availableSlots,
+          isFull,
+          canJoin,
+          joinDisabledReason,
+
+          paymentOptions: {
+            wallet: {
+              enabled: true,
+              status: canJoin
+                ? "available"
+                : "unavailable",
+              amount:
+                Number(
+                  tournament.entryFee || 0
+                ),
+            },
+
+            coin: {
+              enabled:
+                coinPaymentEnabled,
+
+              status:
+                coinPaymentEnabled
+                  ? canJoin
+                    ? "available"
+                    : "unavailable"
+                  : "upcoming",
+
+              amount:
+                Number(
+                  tournament.coinEntryFee ||
+                    0
+                ),
+
+              upcomingText:
+                settings
+                  ?.coinPaymentUpcomingText ||
+                "UPCOMING",
+            },
+          },
+        },
+      });
+    } catch (error) {
+      if (
+        error.name === "CastError"
+      ) {
+        return res.status(400).json({
+          message:
+            "Invalid tournament ID",
+        });
+      }
+
+      console.error(
+        "Get tournament details error:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Server error while fetching tournament details",
+        error: error.message,
+      });
+    }
+  }
+);
 // =====================================
 // GET LOGGED-IN PLAYER'S RESULT
 // =====================================
