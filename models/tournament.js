@@ -217,17 +217,64 @@ const tournamentSchema = new mongoose.Schema(
       trim: true,
     },
 
-    mode: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+mode: {
+  type: String,
+  required: true,
+  trim: true,
+},
 
-    map: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+// Full Map / CS 1v1 / CS 2v2 / CS 4v4
+matchType: {
+  type: String,
+  enum: [
+    "full_map",
+    "cs_1v1",
+    "cs_2v2",
+    "cs_4v4",
+  ],
+  default: "full_map",
+},
+
+// Tournament card image
+cardImage: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
+// Card border/theme colour
+themeColor: {
+  type: String,
+  trim: true,
+  default: "#FACC15",
+},
+
+// Card-এর উপরে দেখানো mode label
+modeLabel: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
+// Join button-এর লেখা
+joinButtonText: {
+  type: String,
+  trim: true,
+  default: "JOIN NOW",
+},
+
+// Details button-এর লেখা
+detailsButtonText: {
+  type: String,
+  trim: true,
+  default: "VIEW DETAILS",
+},
+
+map: {
+  type: String,
+  required: true,
+  trim: true,
+},
 
         entryFee: {
       type: Number,
@@ -244,13 +291,41 @@ const tournamentSchema = new mongoose.Schema(
     },
 
     prizePool: {
-      type: Number,
-      required: true,
-      min: 0,
-      default: 0,
-    },
+  type: Number,
+  required: true,
+  min: 0,
+  default: 0,
+},
 
-    totalSlots: {
+// Card-এ Prize Pool নাকি Winning Point দেখাবে
+prizeDisplayType: {
+  type: String,
+  enum: ["prize_pool", "winning_point"],
+  default: "prize_pool",
+},
+
+// Clash Squad-এর Winning Point
+winningPoint: {
+  type: Number,
+  min: 0,
+  default: 0,
+},
+
+// প্রতি kill-এর reward
+perKillReward: {
+  type: Number,
+  min: 0,
+  default: 0,
+},
+
+// Per Kill Reward টাকা নাকি point
+perKillRewardUnit: {
+  type: String,
+  enum: ["rupee", "point"],
+  default: "rupee",
+},
+
+totalSlots: {
       type: Number,
       required: true,
       min: 1,

@@ -113,90 +113,207 @@ router.post(
   adminMiddleware,
   async (req, res) => {
     try {
-     const {
+const {
   title,
   game,
   mode,
+  matchType,
+  cardImage,
+  themeColor,
+  modeLabel,
+  joinButtonText,
+  detailsButtonText,
   map,
   entryFee,
   coinEntryFee,
   prizePool,
+  prizeDisplayType,
+  winningPoint,
+  perKillReward,
+  perKillRewardUnit,
   totalSlots,
   date,
   time,
 } = req.body || {};
 
       if (
-        !title ||
-        !mode ||
-        !map ||
-        entryFee === undefined ||
-        prizePool === undefined ||
-        !totalSlots ||
-        !date ||
-        !time
-      ) {
-        return res.status(400).json({
-          message: "All tournament fields are required",
-        });
-      }
+  !title ||
+  !mode ||
+  !map ||
+  entryFee === undefined ||
+  prizePool === undefined ||
+  !date ||
+  !time
+) {
+  return res.status(400).json({
+    message: "All required tournament fields are required",
+  });
+}
+      const selectedMatchType = String(
+  matchType || "full_map"
+)
+  .trim()
+  .toLowerCase();
 
-      const parsedEntryFee = Number(entryFee);
-      const parsedCoinEntryFee = Number(coinEntryFee || 0);
-      const parsedPrizePool = Number(prizePool);
-      const parsedTotalSlots = Number(totalSlots);
+const fixedSlotsByMatchType = {
+  full_map: 48,
+  cs_1v1: 2,
+  cs_2v2: 4,
+  cs_4v4: 8,
+};
+
+if (!fixedSlotsByMatchType[selectedMatchType]) {
+  return res.status(400).json({
+    message:
+      "matchType must be full_map, cs_1v1, cs_2v2 or cs_4v4",
+  });
+}
+
+const parsedEntryFee = Number(entryFee);
+const parsedCoinEntryFee = Number(coinEntryFee || 0);
+const parsedPrizePool = Number(prizePool);
+
+const parsedWinningPoint = Number(
+  winningPoint || 0
+);
+
+const parsedPerKillReward = Number(
+  perKillReward || 0
+);
+
+const parsedTotalSlots =
+  fixedSlotsByMatchType[selectedMatchType];
 
 if (
   Number.isNaN(parsedEntryFee) ||
   Number.isNaN(parsedCoinEntryFee) ||
   Number.isNaN(parsedPrizePool) ||
+  Number.isNaN(parsedWinningPoint) ||
+  Number.isNaN(parsedPerKillReward) ||
   Number.isNaN(parsedTotalSlots)
 ) {
   return res.status(400).json({
     message:
-      "Entry fee, prize pool and total slots must be numbers",
+      "Fees, prize, winning point and per-kill reward must be numbers",
   });
 }
+ 
 
-      if (
+if (
   parsedEntryFee < 0 ||
   parsedCoinEntryFee < 0 ||
   parsedPrizePool < 0 ||
+  parsedWinningPoint < 0 ||
+  parsedPerKillReward < 0 ||
   parsedTotalSlots < 1
 ) {
-        return res.status(400).json({
-          message:
-            "Entry fee and prize pool cannot be negative, and total slots must be at least 1",
-        });
-      }
+  return res.status(400).json({
+    message:
+      "Fee, prize, winning point and per-kill reward cannot be negative",
+  });
+}
 
-      const tournament = await Tournament.create({
-        title: String(title).trim(),
+const selectedPrizeDisplayType = String(
+  prizeDisplayType ||
+    (selectedMatchType === "full_map"
+      ? "prize_pool"
+      : "winning_point")
+)
+  .trim()
+  .toLowerCase();
 
-        game: game
-          ? String(game).trim()
-          : "Free Fire",
+if (
+  !["prize_pool", "winning_point"].includes(
+    selectedPrizeDisplayType
+  )
+) {
+  return res.status(400).json({
+    message:
+      "prizeDisplayType must be prize_pool or winning_point",
+  });
+}
 
-        mode: String(mode).trim(),
-        map: String(map).trim(),
+const selectedPerKillRewardUnit = String(
+  perKillRewardUnit ||
+    (selectedMatchType === "full_map"
+      ? "rupee"
+      : "point")
+)
+  .trim()
+  .toLowerCase();
 
-        entryFee:
-  Math.round(parsedEntryFee * 100) / 100,
+if (
+  !["rupee", "point"].includes(
+    selectedPerKillRewardUnit
+  )
+) {
+  return res.status(400).json({
+    message:
+      "perKillRewardUnit must be rupee or point",
+  });
+}
 
-coinEntryFee:
-  Math.floor(parsedCoinEntryFee),
+const tournament = await Tournament.create({
+  title: String(title).trim(),
 
-prizePool:
-          Math.round(parsedPrizePool * 100) / 100,
+  game: game
+    ? String(game).trim()
+    : "Free Fire",
 
-        totalSlots: Math.floor(parsedTotalSlots),
+  mode: String(mode).trim(),
+  matchType: selectedMatchType,
 
-        date: String(date).trim(),
-        time: String(time).trim(),
+  cardImage: cardImage
+    ? String(cardImage).trim()
+    : "",
 
-        createdBy: req.user.userId,
-      });
+  themeColor: themeColor
+    ? String(themeColor).trim()
+    : "#FACC15",
 
+  modeLabel: modeLabel
+    ? String(modeLabel).trim()
+    : String(mode).trim(),
+
+  joinButtonText: joinButtonText
+    ? String(joinButtonText).trim()
+    : "JOIN NOW",
+
+  detailsButtonText: detailsButtonText
+    ? String(detailsButtonText).trim()
+    : "VIEW DETAILS",
+
+  map: String(map).trim(),
+
+  entryFee:
+    Math.round(parsedEntryFee * 100) / 100,
+
+  coinEntryFee:
+    Math.floor(parsedCoinEntryFee),
+
+  prizePool:
+    Math.round(parsedPrizePool * 100) / 100,
+
+  prizeDisplayType:
+    selectedPrizeDisplayType,
+
+  winningPoint:
+    Math.floor(parsedWinningPoint),
+
+  perKillReward:
+    Math.round(parsedPerKillReward * 100) / 100,
+
+  perKillRewardUnit:
+    selectedPerKillRewardUnit,
+
+  totalSlots:
+    parsedTotalSlots,
+
+  date: String(date).trim(),
+  time: String(time).trim(),
+
+  createdBy: req.user.userId,
+});
       return res.status(201).json({
         message: "Tournament created successfully",
         tournament,
@@ -922,43 +1039,239 @@ router.put(
         });
       }
 
-      const allowedFields = [
+      const body = req.body || {};
+      const updates = {};
+
+      // =====================================
+      // REQUIRED TEXT FIELDS
+      // =====================================
+      const requiredTextFields = [
         "title",
-        "game",
         "mode",
         "map",
-        "entryFee",
-        "coinEntryFee",
-        "prizePool",
-        "totalSlots",
         "date",
         "time",
       ];
 
-      allowedFields.forEach((field) => {
-        if (
-          req.body &&
-          req.body[field] !== undefined
-        ) {
-          tournament[field] =
-            req.body[field];
-        }
-      });
+      for (const field of requiredTextFields) {
+        if (body[field] !== undefined) {
+          const value = String(
+            body[field]
+          ).trim();
 
-      if (
-  Number(tournament.entryFee) < 0 ||
-  Number(tournament.coinEntryFee) < 0 ||
-  Number(tournament.prizePool) < 0
-) {
-        return res.status(400).json({
-          message:
-            "Entry fee and prize pool cannot be negative",
-        });
+          if (!value) {
+            return res.status(400).json({
+              message:
+                `${field} cannot be empty`,
+            });
+          }
+
+          updates[field] = value;
+        }
+      }
+
+      // =====================================
+      // GAME NAME
+      // =====================================
+      if (body.game !== undefined) {
+        updates.game =
+          String(body.game).trim() ||
+          "Free Fire";
+      }
+
+      // =====================================
+      // CARD DESIGN FIELDS
+      // =====================================
+      if (body.cardImage !== undefined) {
+        updates.cardImage =
+          String(body.cardImage).trim();
+      }
+
+      if (body.themeColor !== undefined) {
+        updates.themeColor =
+          String(body.themeColor).trim() ||
+          "#FACC15";
+      }
+
+      if (body.modeLabel !== undefined) {
+        updates.modeLabel =
+          String(body.modeLabel).trim();
       }
 
       if (
+        body.joinButtonText !== undefined
+      ) {
+        updates.joinButtonText =
+          String(
+            body.joinButtonText
+          ).trim() || "JOIN NOW";
+      }
+
+      if (
+        body.detailsButtonText !== undefined
+      ) {
+        updates.detailsButtonText =
+          String(
+            body.detailsButtonText
+          ).trim() || "VIEW DETAILS";
+      }
+
+      // =====================================
+      // MATCH TYPE + FIXED PLAYER SLOTS
+      // =====================================
+      if (body.matchType !== undefined) {
+        const selectedMatchType = String(
+          body.matchType
+        )
+          .trim()
+          .toLowerCase();
+
+        const fixedSlotsByMatchType = {
+          full_map: 48,
+          cs_1v1: 2,
+          cs_2v2: 4,
+          cs_4v4: 8,
+        };
+
+        if (
+          !fixedSlotsByMatchType[
+            selectedMatchType
+          ]
+        ) {
+          return res.status(400).json({
+            message:
+              "matchType must be full_map, cs_1v1, cs_2v2 or cs_4v4",
+          });
+        }
+
+        const fixedTotalSlots =
+          fixedSlotsByMatchType[
+            selectedMatchType
+          ];
+
+        if (
+          Number(tournament.joinedSlots) >
+          fixedTotalSlots
+        ) {
+          return res.status(400).json({
+            message:
+              "Match type cannot be changed because joined players exceed the new slot limit",
+          });
+        }
+
+        updates.matchType =
+          selectedMatchType;
+
+        updates.totalSlots =
+          fixedTotalSlots;
+      }
+
+      // =====================================
+      // PRIZE DISPLAY TYPE
+      // =====================================
+      if (
+        body.prizeDisplayType !== undefined
+      ) {
+        const selectedPrizeDisplayType =
+          String(body.prizeDisplayType)
+            .trim()
+            .toLowerCase();
+
+        if (
+          ![
+            "prize_pool",
+            "winning_point",
+          ].includes(
+            selectedPrizeDisplayType
+          )
+        ) {
+          return res.status(400).json({
+            message:
+              "prizeDisplayType must be prize_pool or winning_point",
+          });
+        }
+
+        updates.prizeDisplayType =
+          selectedPrizeDisplayType;
+      }
+
+      // =====================================
+      // PER-KILL REWARD UNIT
+      // =====================================
+      if (
+        body.perKillRewardUnit !== undefined
+      ) {
+        const selectedRewardUnit = String(
+          body.perKillRewardUnit
+        )
+          .trim()
+          .toLowerCase();
+
+        if (
+          !["rupee", "point"].includes(
+            selectedRewardUnit
+          )
+        ) {
+          return res.status(400).json({
+            message:
+              "perKillRewardUnit must be rupee or point",
+          });
+        }
+
+        updates.perKillRewardUnit =
+          selectedRewardUnit;
+      }
+
+      // =====================================
+      // MONEY / POINT FIELDS
+      // =====================================
+      const numericFields = [
+        "entryFee",
+        "coinEntryFee",
+        "prizePool",
+        "winningPoint",
+        "perKillReward",
+      ];
+
+      for (const field of numericFields) {
+        if (body[field] !== undefined) {
+          const value = Number(
+            body[field]
+          );
+
+          if (
+            !Number.isFinite(value) ||
+            value < 0
+          ) {
+            return res.status(400).json({
+              message:
+                `${field} must be a non-negative number`,
+            });
+          }
+
+          if (
+            field === "coinEntryFee" ||
+            field === "winningPoint"
+          ) {
+            updates[field] =
+              Math.floor(value);
+          } else {
+            updates[field] =
+              Math.round(value * 100) /
+              100;
+          }
+        }
+      }
+
+      // সব validated field apply হবে
+      Object.assign(
+        tournament,
+        updates
+      );
+
+      if (
         Number(tournament.totalSlots) <
-        tournament.joinedSlots
+        Number(tournament.joinedSlots)
       ) {
         return res.status(400).json({
           message:
@@ -987,7 +1300,6 @@ router.put(
     }
   }
 );
-
 // =====================================
 // PUBLISH ROOM DETAILS — ADMIN ONLY
 // UPCOMING → LIVE

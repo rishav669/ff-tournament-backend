@@ -319,7 +319,8 @@ const settingsSchema = new mongoose.Schema(
       default: 10,
       min: 0,
     },
-        // ==========================
+
+    // ==========================
     // TOURNAMENT COIN PAYMENT
     // ==========================
     coinTournamentPaymentEnabled: {
@@ -471,6 +472,82 @@ const settingsSchema = new mongoose.Schema(
     },
 
     // ==========================
+    // TOURNAMENT CARD PAGE UI
+    // ==========================
+    tournamentPageHeading: {
+      type: String,
+      trim: true,
+      default: "UPCOMING TOURNAMENTS",
+    },
+
+    tournamentPageSubtitle: {
+      type: String,
+      trim: true,
+      default:
+        "Join now and prove your skills!",
+    },
+
+    tournamentFiltersEnabled: {
+      type: Boolean,
+      default: true,
+    },
+
+    filterAllLabel: {
+      type: String,
+      trim: true,
+      default: "ALL",
+    },
+
+    filterSoloLabel: {
+      type: String,
+      trim: true,
+      default: "SOLO",
+    },
+
+    filterSquadLabel: {
+      type: String,
+      trim: true,
+      default: "SQUAD",
+    },
+
+    roomDetailsNote: {
+      type: String,
+      trim: true,
+      default:
+        "Room ID & Password will be available after tournament starts.",
+    },
+
+    fairPlayLabel: {
+      type: String,
+      trim: true,
+      default: "Fair Play",
+    },
+
+    noHackLabel: {
+      type: String,
+      trim: true,
+      default: "No Hack",
+    },
+
+    noCheatingLabel: {
+      type: String,
+      trim: true,
+      default: "No Cheating",
+    },
+
+    coinFeeLabel: {
+      type: String,
+      trim: true,
+      default: "COIN FEE",
+    },
+
+    coinPaymentUpcomingText: {
+      type: String,
+      trim: true,
+      default: "UPCOMING",
+    },
+
+    // ==========================
     // BANNER
     // ==========================
     activityBannerEnabled: {
@@ -486,4 +563,7 @@ const settingsSchema = new mongoose.Schema(
 
 module.exports =
   mongoose.models.Settings ||
-  mongoose.model("Settings", settingsSchema);
+  mongoose.model(
+    "Settings",
+    settingsSchema
+  );

@@ -265,46 +265,123 @@ const getOrCreateSettings = async () => {
 };
 
 const getPublicSettings = (settings) => {
+  const coinPaymentEnabled =
+    settings.coinTournamentPaymentEnabled === true;
+
   return {
     appName: settings.appName,
     maintenanceMode: settings.maintenanceMode,
-    registrationEnabled: settings.registrationEnabled,
+    registrationEnabled:
+      settings.registrationEnabled,
 
-    depositEnabled: settings.depositEnabled,
-    minimumDeposit: settings.minimumDeposit,
+    depositEnabled:
+      settings.depositEnabled,
+    minimumDeposit:
+      settings.minimumDeposit,
 
-    withdrawalEnabled: settings.withdrawalEnabled,
-    minimumWithdrawal: settings.minimumWithdrawal,
-    withdrawalFee: settings.withdrawalFee,
-    withdrawalTimeHours: settings.withdrawalTimeHours,
+    withdrawalEnabled:
+      settings.withdrawalEnabled,
+    minimumWithdrawal:
+      settings.minimumWithdrawal,
+    withdrawalFee:
+      settings.withdrawalFee,
+    withdrawalTimeHours:
+      settings.withdrawalTimeHours,
 
-    joinTournamentEnabled: settings.joinTournamentEnabled,
-    defaultEntryFee: settings.defaultEntryFee,
-    defaultPrizePool: settings.defaultPrizePool,
-    perKillReward: settings.perKillReward,
-    maxPlayers: settings.maxPlayers,
+    joinTournamentEnabled:
+      settings.joinTournamentEnabled,
+    defaultEntryFee:
+      settings.defaultEntryFee,
+    defaultPrizePool:
+      settings.defaultPrizePool,
+    perKillReward:
+      settings.perKillReward,
+    maxPlayers:
+      settings.maxPlayers,
 
-    rewardedAdsEnabled: settings.rewardedAdsEnabled,
-    coinPerAd: settings.coinPerAd,
-    dailyAdLimit: settings.dailyAdLimit,
+    rewardedAdsEnabled:
+      settings.rewardedAdsEnabled,
+    coinPerAd:
+      settings.coinPerAd,
+    dailyAdLimit:
+      settings.dailyAdLimit,
 
-    couponRedeemEnabled: settings.couponRedeemEnabled,
-    coinRequiredForCoupon: settings.coinRequiredForCoupon,
-    couponValue: settings.couponValue,
+    coinTournamentPaymentEnabled:
+      coinPaymentEnabled,
+
+    coinTournamentPaymentStatus:
+      coinPaymentEnabled
+        ? "available"
+        : "upcoming",
+
+    walletPaymentAvailable: true,
+
+    couponRedeemEnabled:
+      settings.couponRedeemEnabled,
+    coinRequiredForCoupon:
+      settings.coinRequiredForCoupon,
+    couponValue:
+      settings.couponValue,
+
     couponStatus:
       settings.couponRedeemEnabled === true
         ? "available"
         : "upcoming",
 
-    referralEnabled: settings.referralEnabled,
-    referralRewardType: settings.referralRewardType,
-    referralRewardAmount: settings.referralRewardAmount,
-    referralMinimumDeposit: settings.referralMinimumDeposit,
+    referralEnabled:
+      settings.referralEnabled,
+    referralRewardType:
+      settings.referralRewardType,
+    referralRewardAmount:
+      settings.referralRewardAmount,
+    referralMinimumDeposit:
+      settings.referralMinimumDeposit,
     referralMinimumTournamentEntry:
       settings.referralMinimumTournamentEntry,
     referralRequiredCompletedMatches:
       settings.referralRequiredCompletedMatches,
-    referralValidityDays: settings.referralValidityDays,
+    referralValidityDays:
+      settings.referralValidityDays,
+
+    tournamentPage: {
+      heading:
+        settings.tournamentPageHeading,
+
+      subtitle:
+        settings.tournamentPageSubtitle,
+
+      filtersEnabled:
+        settings.tournamentFiltersEnabled,
+
+      filters: {
+        all:
+          settings.filterAllLabel,
+
+        solo:
+          settings.filterSoloLabel,
+
+        squad:
+          settings.filterSquadLabel,
+      },
+
+      roomDetailsNote:
+        settings.roomDetailsNote,
+
+      fairPlayLabel:
+        settings.fairPlayLabel,
+
+      noHackLabel:
+        settings.noHackLabel,
+
+      noCheatingLabel:
+        settings.noCheatingLabel,
+
+      coinFeeLabel:
+        settings.coinFeeLabel,
+
+      coinPaymentUpcomingText:
+        settings.coinPaymentUpcomingText,
+    },
 
     tournamentRules: {
       acceptanceRequired:
@@ -331,10 +408,10 @@ const getPublicSettings = (settings) => {
         "/api/settings/rules",
     },
 
-    activityBannerEnabled: settings.activityBannerEnabled,
+    activityBannerEnabled:
+      settings.activityBannerEnabled,
   };
 };
-
 // =====================================
 // FORMAT RULES BY SELECTED LANGUAGE
 // =====================================
