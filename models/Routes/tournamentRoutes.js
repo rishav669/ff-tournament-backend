@@ -332,21 +332,392 @@ const tournament = await Tournament.create({
 
 // =====================================
 // GET ALL TOURNAMENTS
-// ROOM DETAILS HIDDEN
+// PUBLIC — FINAL CARD LIST API
+// FILTER + SEARCH + PAYMENT STATUS
+// OLD TOURNAMENT COMPATIBILITY
+// ROOM / PLAYER / RESULT DETAILS HIDDEN
 // =====================================
 router.get("/", async (req, res) => {
   try {
-    const tournaments = await Tournament.find()
-      .select("-roomId -roomPassword -joinedPlayers -results")
-      .sort({ createdAt: -1 });
+    const statusMap = {
+      upcoming: "Upcoming",
+      live: "Live",
+      completed: "Completed",
+      cancelled: "Cancelled",
+      expired: "Expired",
+    };
+
+    const allowedMatchTypes = [
+      "full_map",
+      "cs_1v1",
+      "cs_2v2",
+      "cs_4v4",
+    ];
+
+    const andConditions = [];
+    let selectedStatus = "all";
+    let selectedMatchType = "all";
+    let selectedMode = "all";
+    let selectedSearch = "";
+
+    // =====================================
+    // STATUS FILTER
+    // Example: ?status=Upcoming
+    // =====================================
+    if (req.query.status !== undefined) {
+      const normalizedStatus = String(
+        req.query.status
+      )
+        .trim()
+        .toLowerCase();
+
+      if (!statusMap[normalizedStatus]) {
+        return res.status(400).json({
+          message:
+            "status must be Upcoming, Live, Completed, Cancelled or Expired",
+        });
+      }
+
+      selectedStatus =
+        statusMap[normalizedStatus];
+
+      andConditions.push({
+        status: selectedStatus,
+      });
+    }
+
+    // =====================================
+    // MATCH TYPE FILTER
+    // Example: ?matchType=cs_2v2
+    // Old records without matchType count as full_map
+    // =====================================
+    if (req.query.matchType !== undefined) {
+      selectedMatchType = String(
+        req.query.matchType
+      )
+        .trim()
+        .toLowerCase();
+
+      if (
+        !allowedMatchTypes.includes(
+          selectedMatchType
+        )
+      ) {
+        return res.status(400).json({
+          message:
+            "matchType must be full_map, cs_1v1, cs_2v2 or cs_4v4",
+        });
+      }
+
+      if (selectedMatchType === "full_map") {
+        andConditions.push({
+          $or: [
+            { matchType: "full_map" },
+            { matchType: { $exists: false } },
+            { matchType: null },
+            { matchType: "" },
+          ],
+        });
+      } else {
+        andConditions.push({
+          matchType: selectedMatchType,
+        });
+      }
+    }
+
+    // =====================================
+    // MODE FILTER
+    // Example: ?mode=Solo
+    // =====================================
+    if (req.query.mode !== undefined) {
+      selectedMode = String(
+        req.query.mode
+      ).trim();
+
+      if (!selectedMode) {
+        return res.status(400).json({
+          message:
+            "mode cannot be empty",
+        });
+      }
+
+      const escapedMode =
+        selectedMode.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        );
+
+      andConditions.push({
+        mode: {
+          $regex: `^${escapedMode}$`,
+          $options: "i",
+        },
+      });
+    }
+
+    // =====================================
+    // SEARCH
+    // Searches title, game, mode and map
+    // Example: ?search=Clash
+    // =====================================
+    if (req.query.search !== undefined) {
+      selectedSearch = String(
+        req.query.search
+      ).trim();
+
+      if (selectedSearch.length > 100) {
+        return res.status(400).json({
+          message:
+            "search cannot exceed 100 characters",
+        });
+      }
+
+      if (selectedSearch) {
+        const escapedSearch =
+          selectedSearch.replace(
+            /[.*+?^${}()|[\]\\]/g,
+            "\\$&"
+          );
+
+        andConditions.push({
+          $or: [
+            {
+              title: {
+                $regex: escapedSearch,
+                $options: "i",
+              },
+            },
+            {
+              game: {
+                $regex: escapedSearch,
+                $options: "i",
+              },
+            },
+            {
+              mode: {
+                $regex: escapedSearch,
+                $options: "i",
+              },
+            },
+            {
+              map: {
+                $regex: escapedSearch,
+                $options: "i",
+              },
+            },
+          ],
+        });
+      }
+    }
+
+    const filter =
+      andConditions.length > 0
+        ? { $and: andConditions }
+        : {};
+
+    // =====================================
+    // GLOBAL JOIN + PAYMENT SETTINGS
+    // =====================================
+    const settings =
+      await Settings.findOne()
+        .select(
+          "joinTournamentEnabled coinTournamentPaymentEnabled coinPaymentUpcomingText"
+        )
+        .lean();
+
+    const globalJoinEnabled =
+      settings
+        ? settings.joinTournamentEnabled !==
+          false
+        : true;
+
+    const coinPaymentEnabled =
+      settings
+        ? settings
+            .coinTournamentPaymentEnabled ===
+          true
+        : false;
+
+    const coinUpcomingText =
+      settings?.coinPaymentUpcomingText ||
+      "UPCOMING";
+
+    // =====================================
+    // FETCH SAFE PUBLIC TOURNAMENT DATA
+    // =====================================
+    const tournamentDocuments =
+      await Tournament.find(filter)
+        .select(
+          "-roomId -roomPassword -joinedPlayers -results -createdBy -cancelledBy -expiredBy -__v"
+        )
+        .sort({ createdAt: -1 });
+
+    // =====================================
+    // FORMAT FINAL CARD DATA
+    // =====================================
+    const formattedTournaments =
+      tournamentDocuments.map(
+        (document) => {
+          const tournament =
+            document.toObject();
+
+          const tournamentData = {
+            ...tournament,
+
+            matchType:
+              tournament.matchType ||
+              "full_map",
+
+            cardImage:
+              tournament.cardImage || "",
+
+            themeColor:
+              tournament.themeColor ||
+              "#FACC15",
+
+            modeLabel:
+              tournament.modeLabel ||
+              tournament.mode ||
+              "",
+
+            joinButtonText:
+              tournament.joinButtonText ||
+              "JOIN NOW",
+
+            detailsButtonText:
+              tournament.detailsButtonText ||
+              "VIEW DETAILS",
+
+            coinEntryFee: Math.floor(
+              Number(
+                tournament.coinEntryFee || 0
+              )
+            ),
+
+            prizeDisplayType:
+              tournament.prizeDisplayType ||
+              "prize_pool",
+
+            winningPoint: Math.floor(
+              Number(
+                tournament.winningPoint || 0
+              )
+            ),
+
+            perKillReward:
+              Math.round(
+                Number(
+                  tournament.perKillReward || 0
+                ) * 100
+              ) / 100,
+
+            perKillRewardUnit:
+              tournament.perKillRewardUnit ||
+              "rupee",
+          };
+
+          const totalSlots = Number(
+            tournamentData.totalSlots || 0
+          );
+
+          const joinedSlots = Number(
+            tournamentData.joinedSlots || 0
+          );
+
+          const availableSlots = Math.max(
+            totalSlots - joinedSlots,
+            0
+          );
+
+          const isFull =
+            availableSlots === 0;
+
+          const isUpcoming =
+            tournamentData.status ===
+            "Upcoming";
+
+          const canJoin =
+            globalJoinEnabled &&
+            isUpcoming &&
+            !isFull;
+
+          let joinDisabledReason = "";
+
+          if (!globalJoinEnabled) {
+            joinDisabledReason =
+              "Tournament joining is currently disabled";
+          } else if (!isUpcoming) {
+            joinDisabledReason =
+              `Tournament status is ${tournamentData.status}`;
+          } else if (isFull) {
+            joinDisabledReason =
+              "Tournament is full";
+          }
+
+          return {
+            ...tournamentData,
+
+            availableSlots,
+            isFull,
+            canJoin,
+            joinDisabledReason,
+
+            paymentOptions: {
+              wallet: {
+                enabled: true,
+                status: canJoin
+                  ? "available"
+                  : "unavailable",
+                amount:
+                  Math.round(
+                    Number(
+                      tournamentData.entryFee ||
+                        0
+                    ) * 100
+                  ) / 100,
+              },
+
+              coin: {
+                enabled:
+                  coinPaymentEnabled,
+                status:
+                  coinPaymentEnabled
+                    ? canJoin
+                      ? "available"
+                      : "unavailable"
+                    : "upcoming",
+                amount:
+                  tournamentData.coinEntryFee,
+                upcomingText:
+                  coinUpcomingText,
+              },
+            },
+          };
+        }
+      );
 
     return res.status(200).json({
-      message: "Tournaments fetched successfully",
-      count: tournaments.length,
-      tournaments,
+      message:
+        "Tournaments fetched successfully",
+
+      count:
+        formattedTournaments.length,
+
+      filtersApplied: {
+        status: selectedStatus,
+        matchType: selectedMatchType,
+        mode: selectedMode,
+        search: selectedSearch,
+      },
+
+      tournaments:
+        formattedTournaments,
     });
   } catch (error) {
-    console.error("Get tournaments error:", error);
+    console.error(
+      "Get tournaments error:",
+      error
+    );
 
     return res.status(500).json({
       message:
@@ -3157,19 +3528,20 @@ router.get(
 // =====================================
 // GET SINGLE TOURNAMENT DETAILS
 // PUBLIC — ROOM DETAILS HIDDEN
+// PAYMENT STATUS + OLD RECORD COMPATIBILITY
 // =====================================
 router.get(
   "/details/:id",
   async (req, res) => {
     try {
-      const tournament =
+      const tournamentDocument =
         await Tournament.findById(
           req.params.id
         ).select(
-          "-roomId -roomPassword -joinedPlayers -results -createdBy -cancelledBy -expiredBy"
+          "-roomId -roomPassword -joinedPlayers -results -createdBy -cancelledBy -expiredBy -__v"
         );
 
-      if (!tournament) {
+      if (!tournamentDocument) {
         return res.status(404).json({
           message:
             "Tournament not found",
@@ -3177,9 +3549,11 @@ router.get(
       }
 
       const settings =
-        await Settings.findOne().select(
-          "joinTournamentEnabled coinTournamentPaymentEnabled coinPaymentUpcomingText"
-        );
+        await Settings.findOne()
+          .select(
+            "joinTournamentEnabled coinTournamentPaymentEnabled coinPaymentUpcomingText"
+          )
+          .lean();
 
       const globalJoinEnabled =
         settings
@@ -3194,25 +3568,83 @@ router.get(
             true
           : false;
 
-      const tournamentData =
-        tournament.toObject();
+      const coinUpcomingText =
+        settings?.coinPaymentUpcomingText ||
+        "UPCOMING";
 
-      const availableSlots =
-        Math.max(
+      const tournament =
+        tournamentDocument.toObject();
+
+      const tournamentData = {
+        ...tournament,
+
+        matchType:
+          tournament.matchType ||
+          "full_map",
+
+        cardImage:
+          tournament.cardImage || "",
+
+        themeColor:
+          tournament.themeColor ||
+          "#FACC15",
+
+        modeLabel:
+          tournament.modeLabel ||
+          tournament.mode ||
+          "",
+
+        joinButtonText:
+          tournament.joinButtonText ||
+          "JOIN NOW",
+
+        detailsButtonText:
+          tournament.detailsButtonText ||
+          "VIEW DETAILS",
+
+        coinEntryFee: Math.floor(
           Number(
-            tournament.totalSlots || 0
-          ) -
+            tournament.coinEntryFee || 0
+          )
+        ),
+
+        prizeDisplayType:
+          tournament.prizeDisplayType ||
+          "prize_pool",
+
+        winningPoint: Math.floor(
+          Number(
+            tournament.winningPoint || 0
+          )
+        ),
+
+        perKillReward:
+          Math.round(
             Number(
-              tournament.joinedSlots || 0
-            ),
-          0
-        );
+              tournament.perKillReward || 0
+            ) * 100
+          ) / 100,
+
+        perKillRewardUnit:
+          tournament.perKillRewardUnit ||
+          "rupee",
+      };
+
+      const availableSlots = Math.max(
+        Number(
+          tournamentData.totalSlots || 0
+        ) -
+          Number(
+            tournamentData.joinedSlots || 0
+          ),
+        0
+      );
 
       const isFull =
         availableSlots === 0;
 
       const isUpcoming =
-        tournament.status ===
+        tournamentData.status ===
         "Upcoming";
 
       const canJoin =
@@ -3227,7 +3659,7 @@ router.get(
           "Tournament joining is currently disabled";
       } else if (!isUpcoming) {
         joinDisabledReason =
-          `Tournament status is ${tournament.status}`;
+          `Tournament status is ${tournamentData.status}`;
       } else if (isFull) {
         joinDisabledReason =
           "Tournament is full";
@@ -3252,40 +3684,33 @@ router.get(
                 ? "available"
                 : "unavailable",
               amount:
-                Number(
-                  tournament.entryFee || 0
-                ),
+                Math.round(
+                  Number(
+                    tournamentData.entryFee ||
+                      0
+                  ) * 100
+                ) / 100,
             },
 
             coin: {
               enabled:
                 coinPaymentEnabled,
-
               status:
                 coinPaymentEnabled
                   ? canJoin
                     ? "available"
                     : "unavailable"
                   : "upcoming",
-
               amount:
-                Number(
-                  tournament.coinEntryFee ||
-                    0
-                ),
-
+                tournamentData.coinEntryFee,
               upcomingText:
-                settings
-                  ?.coinPaymentUpcomingText ||
-                "UPCOMING",
+                coinUpcomingText,
             },
           },
         },
       });
     } catch (error) {
-      if (
-        error.name === "CastError"
-      ) {
+      if (error.name === "CastError") {
         return res.status(400).json({
           message:
             "Invalid tournament ID",
@@ -3305,6 +3730,7 @@ router.get(
     }
   }
 );
+
 // =====================================
 // GET LOGGED-IN PLAYER'S RESULT
 // =====================================
